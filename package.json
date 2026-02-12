@@ -1,0 +1,46 @@
+{
+  "name": "engageai-backend",
+  "version": "1.0.0",
+  "description": "EngageAI - Portal do Colaborador Backend API",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc",
+    "start": "node dist/main.js",
+    "db:migrate": "prisma migrate dev",
+    "db:generate": "prisma generate",
+    "db:seed": "tsx prisma/seed.ts",
+    "db:studio": "prisma studio",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.988.0",
+    "@aws-sdk/s3-request-presigner": "^3.988.0",
+    "@fastify/cors": "^11.2.0",
+    "@fastify/jwt": "^10.0.0",
+    "@fastify/multipart": "^9.0.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.7.0",
+    "@fastify/swagger-ui": "^5.2.5",
+    "@prisma/client": "^6.3.1",
+    "bcrypt": "^5.1.1",
+    "bullmq": "^5.34.6",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "fastify-plugin": "^5.1.0",
+    "ioredis": "^5.4.2",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^22.13.1",
+    "prisma": "^6.3.1",
+    "supertest": "^7.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.4"
+  }
+}

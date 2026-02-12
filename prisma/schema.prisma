@@ -1,0 +1,940 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  super_admin
+  gestor
+  colaborador
+}
+
+enum EngajamentoType {
+  acesso_consecutivo
+  completar_treinamento
+  interacao_feed
+  dar_feedback
+  responder_pesquisa
+  participar_evento
+  mixed
+}
+
+enum PublicoAlvoType {
+  todo_time
+  colaboradores_especificos
+  por_departamento
+}
+
+enum ParticipantStatus {
+  not_started
+  in_progress
+  completed
+  failed
+}
+
+enum SurveyType {
+  rapida
+  nps
+  clima
+  avaliacao_360
+  custom
+}
+
+enum SurveyStatus {
+  rascunho
+  ativa
+  encerrada
+  arquivada
+}
+
+enum QuestionType {
+  rating
+  text
+  nps
+  checkbox
+  radio
+  scale
+}
+
+enum CourseCategory {
+  lideranca
+  tecnologia
+  comunicacao
+  vendas
+  operacoes
+  produto
+  rh
+  financeiro
+  outros
+}
+
+enum CourseLevel {
+  iniciante
+  intermediario
+  avancado
+}
+
+enum LessonType {
+  video
+  reading
+  quiz
+  practical
+}
+
+enum EvidenceType {
+  foto
+  video
+  documento
+  link
+  checkin
+}
+
+enum FeedbackType {
+  reconhecimento
+  sugestao
+  critica_construtiva
+  agradecimento
+  desenvolvimento
+}
+
+enum FeedbackStatus {
+  pendente
+  aprovado
+  rejeitado
+}
+
+enum MoodLevel {
+  muito_ruim
+  ruim
+  neutro
+  bom
+  muito_bom
+}
+
+enum MetaStatus {
+  rascunho
+  ativa
+  inativa
+  concluida
+}
+
+enum TipoMeta {
+  engajamento
+  desenvolvimento
+  lideranca
+}
+
+enum EscopoMeta {
+  individual
+  time
+}
+
+enum PeriodoMeta {
+  semanal
+  mensal
+  trimestral
+}
+
+enum CriterioAcao {
+  registro_humor
+  publicacao_feed
+  curtida
+  comentario
+  envio_feedback
+  resposta_pesquisa
+  conclusao_treinamento
+  participacao_trilha
+  participacao_evento
+  interacao_recorrente
+}
+
+enum ActionType {
+  acessar_plataforma
+  completar_treinamento
+  interagir_feed
+  dar_feedback
+  responder_pesquisa
+  participar_evento
+  acessar_consecutivo
+  resgatar_recompensa
+  registrar_humor
+  criar_post
+  comentar_post
+  reagir_post
+}
+
+enum NotificationType {
+  xp_gained
+  level_up
+  achievement
+  feedback_received
+  feedback_approved
+  survey_available
+  event_reminder
+  mission_complete
+  reward_redeemed
+  mention
+  system
+}
+
+enum NotificationStatus {
+  unread
+  read
+}
+
+enum ReactionType {
+  like
+  love
+  celebrate
+  support
+  insightful
+}
+
+enum TrainingContentOrigin {
+  texto
+  documento
+  audio
+  video
+}
+
+enum TrainingContentFormat {
+  texto
+  audio
+  video
+}
+
+enum TrainingQuestionType {
+  multipla_escolha
+  descritiva
+}
+
+enum TrainingAnswerType {
+  multipla_escolha
+  descritiva
+  checkbox
+  audio
+  video
+}
+
+enum TrainingCoverType {
+  upload
+  url
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  nome         String
+  cargo        String
+  departamento String
+  role         UserRole @default(colaborador)
+  nivel        Int      @default(1)
+  xp           Int      @default(0)
+  xpProximo    Int      @default(500)
+  estrelas     Int      @default(0)
+  avatar       String?
+  bio          String?
+  telefone     String?
+  localizacao  String?
+  hiredAt      DateTime?
+  isActive     Boolean  @default(true)
+  managerId    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  manager              User?                   @relation("ManagerTeam", fields: [managerId], references: [id])
+  team                 User[]                  @relation("ManagerTeam")
+  refreshTokens        RefreshToken[]
+  engagementTracking   EngagementTracking?
+  engajamentoParticipations EngajamentoParticipant[]
+  surveyResponses      SurveyResponse[]
+  courseProgress       CourseProgress[]
+  eventParticipations  EventParticipation[]
+  feedbacksSent        Feedback[]              @relation("FeedbackFrom")
+  feedbacksReceived    Feedback[]              @relation("FeedbackTo")
+  moodEntries          MoodEntry[]
+  goalProgress         GoalProgress[]
+  rewardRedemptions    RewardRedemption[]
+  feedPosts            FeedPost[]
+  feedReactions        FeedReaction[]
+  feedComments         FeedComment[]
+  dailyMissionCompletions DailyMissionCompletion[]
+  notifications        Notification[]
+  auditLogsAsActor     AuditLog[]              @relation("AuditActor")
+  createdEngajamentos  Engajamento[]           @relation("EngajamentoCreator")
+  createdSurveys       Survey[]                @relation("SurveyCreator")
+  createdCourses       Course[]                @relation("CourseCreator")
+  createdTrainings     Training[]              @relation("TrainingCreator")
+  createdEvents        Evento[]                @relation("EventoCreator")
+  createdGoals         Goal[]                  @relation("GoalCreator")
+  activatedGoals       GoalActivation[]
+  notificationPreference NotificationPreference?
+  trainingProgress     TrainingProgress[]
+  trainingQuestionProgress TrainingQuestionProgress[]
+  aiCaches             AiCache[]
+  aiUsageLogs          AiUsageLog[]
+
+  @@map("users")
+}
+
+model NotificationPreference {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  email        Boolean  @default(true)
+  push         Boolean  @default(true)
+  humor        Boolean  @default(true)
+  pesquisas    Boolean  @default(true)
+  recompensas  Boolean  @default(true)
+  treinamentos Boolean  @default(false)
+  feedbacks    Boolean  @default(true)
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notification_preferences")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  userId    String
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("refresh_tokens")
+}
+
+model EngagementTracking {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  dailyAccess       String[] // Array of "YYYY-MM-DD" strings
+  consecutiveStreak Int      @default(0)
+  lastAccessDate    String?
+  completedTrainings String[]
+  feedbacksGiven    String[]
+  surveysAnswered   String[]
+  eventsParticipated String[]
+  updatedAt         DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("engagement_tracking")
+}
+
+model Engajamento {
+  id              String          @id @default(cuid())
+  title           String
+  description     String?
+  type            EngajamentoType
+  rewardXP        Int             @default(0)
+  rewardStars     Int             @default(0)
+  isActive        Boolean         @default(true)
+  startDate       DateTime?
+  endDate         DateTime?
+  publicoAlvoType PublicoAlvoType @default(todo_time)
+  targetIds       String[]        // userId or departamento names
+  completionMethod String?        // "automatic" | "manual"
+  creatorId       String
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  creator         User                    @relation("EngajamentoCreator", fields: [creatorId], references: [id])
+  participants    EngajamentoParticipant[]
+  requiredActions EngajamentoAction[]
+
+  @@map("engajamentos")
+}
+
+model EngajamentoAction {
+  id            String      @id @default(cuid())
+  engajamentoId String
+  type          ActionType
+  target        Int?        // e.g., 5 days consecutive
+  description   String?
+  order         Int         @default(0)
+
+  engajamento   Engajamento @relation(fields: [engajamentoId], references: [id], onDelete: Cascade)
+
+  @@map("engajamento_actions")
+}
+
+model EngajamentoParticipant {
+  id                String            @id @default(cuid())
+  engajamentoId     String
+  userId            String
+  status            ParticipantStatus @default(not_started)
+  progressPercentage Int              @default(0)
+  completedActions  String[]          // action IDs completed
+  startedAt         DateTime?
+  completedAt       DateTime?
+  failedAt          DateTime?
+  failReason        String?
+
+  engajamento Engajamento @relation(fields: [engajamentoId], references: [id], onDelete: Cascade)
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([engajamentoId, userId])
+  @@map("engajamento_participants")
+}
+
+model Survey {
+  id             String       @id @default(cuid())
+  title          String
+  description    String?
+  type           SurveyType
+  status         SurveyStatus @default(rascunho)
+  deadline       DateTime?
+  rewardXP       Int          @default(0)
+  targetAudience PublicoAlvoType @default(todo_time)
+  targetIds      String[]
+  isAnonymous    Boolean      @default(false)
+  creatorId      String
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  creator   User             @relation("SurveyCreator", fields: [creatorId], references: [id])
+  questions SurveyQuestion[]
+  responses SurveyResponse[]
+
+  @@map("surveys")
+}
+
+model SurveyQuestion {
+  id       String       @id @default(cuid())
+  surveyId String
+  type     QuestionType
+  text     String
+  options  String[]     // for checkbox/radio
+  required Boolean      @default(true)
+  order    Int          @default(0)
+
+  survey    Survey               @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  responses SurveyQuestionAnswer[]
+
+  @@map("survey_questions")
+}
+
+model SurveyResponse {
+  id          String   @id @default(cuid())
+  surveyId    String
+  userId      String
+  submittedAt DateTime @default(now())
+
+  survey  Survey               @relation(fields: [surveyId], references: [id], onDelete: Cascade)
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers SurveyQuestionAnswer[]
+
+  @@unique([surveyId, userId])
+  @@map("survey_responses")
+}
+
+model SurveyQuestionAnswer {
+  id         String @id @default(cuid())
+  responseId String
+  questionId String
+  value      String // JSON stringified answer
+
+  response SurveyResponse @relation(fields: [responseId], references: [id], onDelete: Cascade)
+  question SurveyQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@map("survey_question_answers")
+}
+
+model Course {
+  id             String         @id @default(cuid())
+  title          String
+  description    String?
+  category       CourseCategory
+  level          CourseLevel
+  rewardXP       Int            @default(0)
+  hasCertificate Boolean        @default(false)
+  thumbnailUrl   String?
+  isActive       Boolean        @default(true)
+  creatorId      String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  creator   User           @relation("CourseCreator", fields: [creatorId], references: [id])
+  lessons   Lesson[]
+  progress  CourseProgress[]
+
+  @@map("courses")
+}
+
+model Lesson {
+  id          String     @id @default(cuid())
+  courseId    String
+  title       String
+  description String?
+  type        LessonType
+  contentUrl  String?
+  duration    Int?       // in minutes
+  order       Int        @default(0)
+  rewardXP    Int        @default(0)
+
+  course   Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@map("lessons")
+}
+
+model CourseProgress {
+  id               String   @id @default(cuid())
+  courseId         String
+  userId           String
+  completedLessons String[] // lesson IDs
+  progress         Int      @default(0) // 0-100
+  completedAt      DateTime?
+  certificateUrl   String?
+  startedAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, userId])
+  @@map("course_progress")
+}
+
+model Training {
+  id               String                @id @default(cuid())
+  title            String
+  description      String?
+  coverType        TrainingCoverType     @default(url)
+  coverUrl         String?
+  primaryColor     String?
+  campaignId       String?
+  contentOrigin    TrainingContentOrigin?
+  contentText      String?
+  contentFiles     String[]
+  noAssessment     Boolean               @default(false)
+  convertContent   Boolean               @default(false)
+  conversionType   TrainingContentFormat?
+  allowOriginal    Boolean               @default(false)
+  summaryPercent   Int                   @default(0)
+  summaryText      String?
+  summaryConfirmed Boolean               @default(false)
+  aiConfig         Json?
+  aiConversions    TrainingContentFormat[]
+  visibleFormats   TrainingContentFormat[]
+  questionsRequired Boolean              @default(true)
+  requireSequential Boolean              @default(false)
+  audienceType     PublicoAlvoType       @default(todo_time)
+  audienceIds      String[]
+  startDate        DateTime?
+  endDate          DateTime?
+  rewardsActive    Boolean               @default(true)
+  rewardXP         Int                   @default(0)
+  rewardStars      Int                   @default(0)
+  creatorId        String
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  deletedAt        DateTime?
+
+  creator   User              @relation("TrainingCreator", fields: [creatorId], references: [id])
+  questions TrainingQuestion[]
+  progress  TrainingProgress[]
+  questionProgress TrainingQuestionProgress[]
+
+  @@map("trainings")
+}
+
+model TrainingProgress {
+  id          String   @id @default(cuid())
+  trainingId  String
+  userId      String
+  progress    Int      @default(0)
+  score       Int      @default(0)
+  completedAt DateTime?
+  startedAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  training Training @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([trainingId, userId])
+  @@map("training_progress")
+}
+
+model TrainingQuestion {
+  id            String               @id @default(cuid())
+  trainingId    String
+  question      String
+  type          TrainingQuestionType
+  answerTypes   TrainingAnswerType[]
+  options       String[]
+  correctOption Int?
+  order         Int                  @default(0)
+
+  training Training @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  answers  TrainingQuestionProgress[]
+
+  @@map("training_questions")
+}
+
+model TrainingQuestionProgress {
+  id         String   @id @default(cuid())
+  trainingId String
+  questionId String
+  userId     String
+  answer     String   // JSON stringified answer
+  answeredAt DateTime @default(now())
+
+  training Training         @relation(fields: [trainingId], references: [id], onDelete: Cascade)
+  question TrainingQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, userId])
+  @@map("training_question_progress")
+}
+
+model AiCache {
+  id          String   @id @default(cuid())
+  userId      String
+  purpose     String
+  model       String
+  requestHash String
+  response    Json
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, purpose, model, requestHash], name: "userId_purpose_model_requestHash")
+  @@map("ai_cache")
+}
+
+model AiUsageLog {
+  id               String   @id @default(cuid())
+  userId           String
+  purpose          String
+  model            String
+  promptTokens     Int      @default(0)
+  completionTokens Int      @default(0)
+  totalTokens      Int      @default(0)
+  costUsd          Float    @default(0)
+  cached           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_usage_logs")
+}
+
+model Evento {
+  id           String    @id @default(cuid())
+  title        String
+  description  String?
+  date         DateTime
+  endDate      DateTime?
+  location     String?
+  isOnline     Boolean   @default(false)
+  meetingUrl   String?
+  rewardXP     Int       @default(0)
+  maxParticipants Int?
+  isActive     Boolean   @default(true)
+  evidenceType EvidenceType?
+  creatorId    String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  creator        User               @relation("EventoCreator", fields: [creatorId], references: [id])
+  participations EventParticipation[]
+
+  @@map("eventos")
+}
+
+model EventParticipation {
+  id           String       @id @default(cuid())
+  eventoId     String
+  userId       String
+  registeredAt DateTime     @default(now())
+  attended     Boolean      @default(false)
+  evidenceUrl  String?
+  evidenceType EvidenceType?
+  xpGranted    Int          @default(0)
+  xpGrantedAt  DateTime?
+
+  evento Evento @relation(fields: [eventoId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventoId, userId])
+  @@map("event_participations")
+}
+
+model Feedback {
+  id          String         @id @default(cuid())
+  fromUserId  String
+  toUserId    String
+  type        FeedbackType
+  content     String
+  isPublic    Boolean        @default(false)
+  isAnonymous Boolean        @default(false)
+  status      FeedbackStatus @default(pendente)
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNote  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  fromUser User @relation("FeedbackFrom", fields: [fromUserId], references: [id])
+  toUser   User @relation("FeedbackTo", fields: [toUserId], references: [id])
+
+  @@map("feedbacks")
+}
+
+model FeedbackSettings {
+  id                  String   @id @default("singleton")
+  maxFeedbacksPerDay  Int      @default(5)
+  allowPublicFeedback Boolean  @default(true)
+  requireApproval     Boolean  @default(true)
+  allowAnonymous      Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+
+  @@map("feedback_settings")
+}
+
+model MoodEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  date      String   // "YYYY-MM-DD"
+  mood      Int      // 1-5
+  note      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@map("mood_entries")
+}
+
+model Goal {
+  id                    String     @id @default(cuid())
+  nome                  String
+  descricao             String?
+  tipo                  TipoMeta
+  publicoAlvo           String     // "colaboradores" | "gestores"
+  escopo                EscopoMeta
+  periodo               PeriodoMeta
+  status                MetaStatus @default(rascunho)
+  disponivelParaGestores Boolean   @default(false)
+  creatorId             String
+  createdAt             DateTime   @default(now())
+  updatedAt             DateTime   @updatedAt
+
+  creator    User             @relation("GoalCreator", fields: [creatorId], references: [id])
+  criterios  GoalCriterio[]
+  progress   GoalProgress[]
+  activations GoalActivation[]
+
+  @@map("goals")
+}
+
+model GoalCriterio {
+  id               String       @id @default(cuid())
+  goalId           String
+  acao             CriterioAcao
+  quantidadeMinima Int
+  descricao        String?
+
+  goal     Goal                  @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  progress GoalCriterioProgress[]
+
+  @@map("goal_criterios")
+}
+
+model GoalActivation {
+  id          String   @id @default(cuid())
+  goalId      String
+  gestorId    String
+  activatedAt DateTime @default(now())
+
+  goal   Goal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  gestor User @relation(fields: [gestorId], references: [id])
+
+  @@unique([goalId, gestorId])
+  @@map("goal_activations")
+}
+
+model GoalProgress {
+  id             String    @id @default(cuid())
+  goalId         String
+  userId         String
+  progresso      Int       @default(0) // 0-100
+  concluida      Boolean   @default(false)
+  dataInicio     DateTime  @default(now())
+  dataConclusao  DateTime?
+  updatedAt      DateTime  @updatedAt
+
+  goal              Goal                  @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  user              User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  criterioProgress  GoalCriterioProgress[]
+
+  @@unique([goalId, userId])
+  @@map("goal_progress")
+}
+
+model GoalCriterioProgress {
+  id         String @id @default(cuid())
+  progressId String
+  criterioId String
+  valorAtual Int    @default(0)
+
+  progress GoalProgress @relation(fields: [progressId], references: [id], onDelete: Cascade)
+  criterio GoalCriterio @relation(fields: [criterioId], references: [id], onDelete: Cascade)
+
+  @@unique([progressId, criterioId])
+  @@map("goal_criterio_progress")
+}
+
+model Reward {
+  id          String   @id @default(cuid())
+  nome        String
+  descricao   String?
+  custo       Int      // in stars
+  quantidade  Int?     // null = unlimited
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  category    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  redemptions RewardRedemption[]
+
+  @@map("rewards")
+}
+
+model RewardRedemption {
+  id         String   @id @default(cuid())
+  rewardId   String
+  userId     String
+  starsCost  Int      // snapshot of cost at time of redemption
+  status     String   @default("pending") // pending | approved | delivered | rejected
+  redeemedAt DateTime @default(now())
+
+  reward Reward @relation(fields: [rewardId], references: [id])
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reward_redemptions")
+}
+
+model FeedPost {
+  id        String    @id @default(cuid())
+  userId    String
+  content   String
+  imageUrl  String?
+  isPinned  Boolean   @default(false)
+  deletedAt DateTime? // soft delete
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reactions FeedReaction[]
+  comments  FeedComment[]
+
+  @@map("feed_posts")
+}
+
+model FeedReaction {
+  id     String       @id @default(cuid())
+  postId String
+  userId String
+  type   ReactionType
+
+  post FeedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId, type])
+  @@map("feed_reactions")
+}
+
+model FeedComment {
+  id        String    @id @default(cuid())
+  postId    String
+  userId    String
+  content   String
+  deletedAt DateTime? // soft delete
+  createdAt DateTime  @default(now())
+
+  post FeedPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("feed_comments")
+}
+
+model DailyMission {
+  id             String          @id @default(cuid())
+  nome           String
+  descricao      String?
+  actionType     ActionType
+  target         Int             @default(1)
+  rewardXP       Int             @default(50)
+  rewardStars    Int             @default(0)
+  diasAtivos     Int[]           // 0=Sunday, 1=Monday, ..., 6=Saturday
+  publicoAlvoType PublicoAlvoType @default(todo_time)
+  targetIds      String[]
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  completions DailyMissionCompletion[]
+
+  @@map("daily_missions")
+}
+
+model DailyMissionCompletion {
+  id        String   @id @default(cuid())
+  missionId String
+  userId    String
+  date      String   // "YYYY-MM-DD"
+  completedAt DateTime @default(now())
+
+  mission DailyMission @relation(fields: [missionId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([missionId, userId, date])
+  @@map("daily_mission_completions")
+}
+
+model Notification {
+  id        String             @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  message   String
+  data      Json?              // extra payload
+  status    NotificationStatus @default(unread)
+  createdAt DateTime           @default(now())
+  readAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  action       String
+  resourceType String
+  resourceId   String?
+  metadata     Json?
+  ipAddress    String?
+  createdAt    DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id])
+
+  @@map("audit_logs")
+}
