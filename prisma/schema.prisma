@@ -526,6 +526,7 @@ model Training {
   summaryPercent   Int                   @default(0)
   summaryText      String?
   summaryConfirmed Boolean               @default(false)
+  summaryAudioKey  String?
   aiConfig         Json?
   aiConversions    TrainingContentFormat[]
   visibleFormats   TrainingContentFormat[]

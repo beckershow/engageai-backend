@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../../../infrastructure/database/prisma.client.js'
+import { createDownloadUrl } from '../../../infrastructure/storage/r2.client.js'
 import { authenticate } from '../../middlewares/authenticate.js'
 import { authorize } from '../../middlewares/authorize.js'
 import { NotFoundError, ForbiddenError } from '../../../shared/errors/app-error.js'
@@ -166,14 +167,27 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       select: { questionId: true, answeredAt: true },
     })
 
-    const userProgress = training.progress[0] ?? null
-    return reply.send({
-      data: {
-        ...training,
-        userProgress,
-        userQuestionProgress: questionProgress,
-      },
-    })
+      const userProgress = training.progress[0] ?? null
+      const summaryAudioUrl = training.summaryAudioKey
+        ? (await createDownloadUrl({ key: training.summaryAudioKey, expiresIn: 3600 })).downloadUrl
+        : null
+      const contentFileUrls = training.contentFiles?.length
+        ? await Promise.all(
+            training.contentFiles.map(async (key) => {
+              const { downloadUrl } = await createDownloadUrl({ key, expiresIn: 3600 })
+              return { key, url: downloadUrl }
+            }),
+          )
+        : []
+      return reply.send({
+        data: {
+          ...training,
+          userProgress,
+          summaryAudioUrl,
+          contentFileUrls,
+          userQuestionProgress: questionProgress,
+        },
+      })
   })
 
   // POST /trainings (gestor+)
@@ -202,6 +216,7 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       percentualResumo: z.number().int().min(0).max(100).default(0),
       resumoGerado: z.string().optional(),
       resumoConfirmado: z.boolean().default(false),
+      resumoAudioKey: z.string().optional(),
       iaConfig: z.any().optional(),
       iaConversoes: z.array(z.enum(['texto', 'audio', 'video'])).default([]),
       colaboradorVe: z.array(z.enum(['texto', 'audio', 'video'])).default([]),
@@ -258,6 +273,7 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
         summaryPercent: body.percentualResumo,
         summaryText: body.resumoGerado,
         summaryConfirmed: body.resumoConfirmado,
+        summaryAudioKey: body.resumoAudioKey,
         aiConfig: body.iaConfig ?? null,
         aiConversions: mapEnumArray(body.iaConversoes, contentFormatMap),
         visibleFormats: mapEnumArray(body.colaboradorVe, contentFormatMap),
@@ -301,18 +317,27 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
     })
     if (!training || training.deletedAt) throw new NotFoundError('Training', id)
 
-    const existing = await prisma.trainingProgress.findUnique({
-      where: { trainingId_userId: { trainingId: id, userId: request.user.id } },
-    })
-    if (existing) return reply.send({ data: existing })
+      const existing = await prisma.trainingProgress.findUnique({
+        where: { trainingId_userId: { trainingId: id, userId: request.user.id } },
+      })
+      if (existing) {
+        if (existing.progress < 10) {
+          const updated = await prisma.trainingProgress.update({
+            where: { trainingId_userId: { trainingId: id, userId: request.user.id } },
+            data: { progress: 10 },
+          })
+          return reply.send({ data: updated })
+        }
+        return reply.send({ data: existing })
+      }
 
     const progress = await prisma.trainingProgress.create({
       data: {
         trainingId: id,
         userId: request.user.id,
-        progress: 0,
-      },
-    })
+          progress: 10,
+        },
+      })
 
     return reply.code(201).send({ data: progress })
   })
@@ -324,7 +349,10 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string() }).parse(request.params)
 
-    const training = await prisma.training.findUnique({ where: { id } })
+      const training = await prisma.training.findUnique({
+        where: { id },
+        include: { questions: { select: { id: true, correctOption: true, options: true } } },
+      })
     if (!training || training.deletedAt) throw new NotFoundError('Training', id)
 
     const existing = await prisma.trainingProgress.findUnique({
@@ -335,14 +363,14 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({ data: existing })
     }
 
-    if (training.questionsRequired && training.questions.length > 0) {
-      const answeredCount = await prisma.trainingQuestionProgress.count({
-        where: { trainingId: id, userId: request.user.id },
-      })
-      if (answeredCount < training.questions.length) {
-        throw new ForbiddenError('All questions must be answered before completion')
+      if (training.questions.length > 0) {
+        const answeredCount = await prisma.trainingQuestionProgress.count({
+          where: { trainingId: id, userId: request.user.id },
+        })
+        if (answeredCount < training.questions.length) {
+          throw new ForbiddenError('All questions must be answered before completion')
+        }
       }
-    }
 
     // Calculate score
     let score = 0
@@ -525,6 +553,7 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       percentualResumo: z.number().int().min(0).max(100).optional(),
       resumoGerado: z.string().optional(),
       resumoConfirmado: z.boolean().optional(),
+      resumoAudioKey: z.string().optional(),
       iaConfig: z.any().optional(),
       iaConversoes: z.array(z.enum(['texto', 'audio', 'video'])).optional(),
       colaboradorVe: z.array(z.enum(['texto', 'audio', 'video'])).optional(),
@@ -588,6 +617,7 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       summaryPercent: body.percentualResumo,
       summaryText: body.resumoGerado,
       summaryConfirmed: body.resumoConfirmado,
+      summaryAudioKey: body.resumoAudioKey,
       aiConfig: body.iaConfig,
       aiConversions: body.iaConversoes ? mapEnumArray(body.iaConversoes, contentFormatMap) : undefined,
       visibleFormats: body.colaboradorVe ? mapEnumArray(body.colaboradorVe, contentFormatMap) : undefined,

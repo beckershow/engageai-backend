@@ -28,6 +28,35 @@ export async function createUploadUrl(params: {
   return { uploadUrl }
 }
 
+export async function createDownloadUrl(params: {
+  key: string
+  expiresIn?: number
+}) {
+  const command = new GetObjectCommand({
+    Bucket: env.R2_BUCKET,
+    Key: params.key,
+  })
+
+  const downloadUrl = await getSignedUrl(r2Client, command, { expiresIn: params.expiresIn ?? 3600 })
+  return { downloadUrl }
+}
+
+export async function uploadObject(params: {
+  key: string
+  contentType: string
+  body: Buffer
+}) {
+  const command = new PutObjectCommand({
+    Bucket: env.R2_BUCKET,
+    Key: params.key,
+    ContentType: params.contentType,
+    Body: params.body,
+  })
+
+  await r2Client.send(command)
+  return { key: params.key }
+}
+
 async function streamToBuffer(stream: any): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
