@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '../../../infrastructure/database/prisma.client.js'
-import { createDownloadUrl } from '../../../infrastructure/storage/r2.client.js'
+import { createDownloadUrl, uploadObject } from '../../../infrastructure/storage/r2.client.js'
 import { authenticate } from '../../middlewares/authenticate.js'
 import { authorize } from '../../middlewares/authorize.js'
 import { NotFoundError, ForbiddenError } from '../../../shared/errors/app-error.js'
@@ -48,6 +48,35 @@ function normalizeDate(input?: string | null): Date | null {
 
 function mapEnumArray(values: string[], mapper: Record<string, string>): string[] {
   return values.map((v) => mapper[v]).filter(Boolean)
+}
+
+/** If cover value is a base64 data URI, upload to R2 and return the key. Otherwise return as-is. */
+async function uploadCoverIfBase64(valor: string | undefined, userId: string): Promise<string | undefined> {
+  if (!valor || !valor.startsWith('data:')) return valor
+  const match = valor.match(/^data:(image\/\w+);base64,(.+)$/)
+  if (!match) return valor
+  const contentType = match[1]
+  const ext = contentType.split('/')[1] || 'png'
+  const buffer = Buffer.from(match[2], 'base64')
+  const key = `trainings/${userId}/${Date.now()}-capa.${ext}`
+  await uploadObject({ key, contentType, body: buffer })
+  return key
+}
+
+/** Resolve coverUrl: if it's an R2 key (not a full URL), generate a signed download URL */
+async function resolveCoverUrl(coverUrl: string | null | undefined, coverType: string | null | undefined): Promise<string | null> {
+  if (!coverUrl) return null
+  // If it's already a full URL (http/https or data URI), return as-is
+  if (coverUrl.startsWith('http://') || coverUrl.startsWith('https://') || coverUrl.startsWith('data:')) {
+    return coverUrl
+  }
+  // It's an R2 key — generate a signed URL
+  try {
+    const { downloadUrl } = await createDownloadUrl({ key: coverUrl, expiresIn: 3600 })
+    return downloadUrl
+  } catch {
+    return null
+  }
 }
 
 export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
@@ -120,11 +149,16 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
     })
     const progressMap = new Map(userProgress.map((p) => [p.trainingId, p]))
 
-    return reply.send({
-      data: trainings.map((t) => ({
+    const trainingsWithCovers = await Promise.all(
+      trainings.map(async (t) => ({
         ...t,
+        coverSignedUrl: await resolveCoverUrl(t.coverUrl, t.coverType),
         userProgress: progressMap.get(t.id) ?? null,
       })),
+    )
+
+    return reply.send({
+      data: trainingsWithCovers,
       meta: buildPaginationMeta(total, page, limit),
     })
   })
@@ -179,9 +213,12 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
             }),
           )
         : []
+      const coverSignedUrl = await resolveCoverUrl(training.coverUrl, training.coverType)
+
       return reply.send({
         data: {
           ...training,
+          coverSignedUrl,
           userProgress,
           summaryAudioUrl,
           contentFileUrls,
@@ -255,12 +292,15 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
 
+    // Upload cover to R2 if it's a base64 data URI
+    const resolvedCoverValue = await uploadCoverIfBase64(body.capa.valor, request.user.id)
+
     const training = await prisma.training.create({
       data: {
         title: body.titulo,
         description: body.descricao,
         coverType: body.capa.tipo,
-        coverUrl: body.capa.valor,
+        coverUrl: resolvedCoverValue,
         primaryColor: body.corPrincipal,
         campaignId: body.vinculadoCampanha ? body.campanhaId : null,
         contentOrigin: body.conteudoOrigem ? contentOriginMap[body.conteudoOrigem] : null,
@@ -595,6 +635,11 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
 
+    // Upload cover to R2 if it's a base64 data URI
+    const resolvedCoverValueUpdate = body.capa?.valor
+      ? await uploadCoverIfBase64(body.capa.valor, request.user.id)
+      : undefined
+
     const shouldClearCampaign = body.vinculadoCampanha === false
     const nextCampaignId = shouldClearCampaign
       ? null
@@ -604,7 +649,7 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       title: body.titulo,
       description: body.descricao,
       coverType: body.capa?.tipo,
-      coverUrl: body.capa?.valor,
+      coverUrl: resolvedCoverValueUpdate,
       primaryColor: body.corPrincipal,
       campaignId: nextCampaignId,
       contentOrigin: body.conteudoOrigem ? contentOriginMap[body.conteudoOrigem] : undefined,

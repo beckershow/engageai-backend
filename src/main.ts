@@ -36,10 +36,11 @@ async function build() {
         ? { target: 'pino-pretty', options: { colorize: true } }
         : undefined,
     },
+    bodyLimit: 5 * 1024 * 1024, // 5MB to accommodate large JSON payloads
   })
 
   // Global error handler
-  fastify.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
+  fastify.setErrorHandler((error: Error & { statusCode?: number; code?: string }, _request, reply) => {
     if (error instanceof AppError) {
       return reply.status(error.statusCode).send({
         error: {
@@ -52,17 +53,41 @@ async function build() {
 
     // Zod validation error
     if (error.name === 'ZodError') {
+      let details: any[] = []
+      try { details = JSON.parse(error.message) } catch { /* ignore */ }
+      const fieldMessages = details
+        .map((d: any) => {
+          const field = d.path?.join('.') || 'campo'
+          if (d.code === 'invalid_type') return `"${field}" esperava ${d.expected}, recebeu ${d.received}`
+          if (d.code === 'too_small') return `"${field}" é obrigatório`
+          if (d.code === 'invalid_enum_value') return `"${field}" valor inválido: ${d.received}`
+          return d.message ? `"${field}": ${d.message}` : `"${field}" inválido`
+        })
+        .slice(0, 5)
       return reply.status(422).send({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'Validation failed',
-          details: JSON.parse(error.message),
+          message: fieldMessages.length
+            ? `Erro de validação: ${fieldMessages.join('; ')}`
+            : 'Erro de validação nos dados enviados',
+          details,
           statusCode: 422,
         },
       })
     }
 
-    // Fastify validation error
+    // Fastify body too large
+    if (error.statusCode === 413 || error.code === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      return reply.status(413).send({
+        error: {
+          code: 'PAYLOAD_TOO_LARGE',
+          message: 'O conteúdo enviado excede o tamanho máximo permitido. Reduza o tamanho dos arquivos ou imagens.',
+          statusCode: 413,
+        },
+      })
+    }
+
+    // Fastify validation / bad request
     if (error.statusCode === 400) {
       return reply.status(400).send({
         error: {
@@ -73,12 +98,97 @@ async function build() {
       })
     }
 
+    // Prisma errors
+    if (error.name === 'PrismaClientKnownRequestError' || (error as any).clientVersion) {
+      const prismaError = error as any
+      fastify.log.error(error)
+
+      if (prismaError.code === 'P2002') {
+        const fields = prismaError.meta?.target?.join(', ') || 'campo'
+        return reply.status(409).send({
+          error: {
+            code: 'CONFLICT',
+            message: `Já existe um registro com esse valor em: ${fields}`,
+            statusCode: 409,
+          },
+        })
+      }
+      if (prismaError.code === 'P2003') {
+        return reply.status(422).send({
+          error: {
+            code: 'FOREIGN_KEY_ERROR',
+            message: 'Referência inválida: um dos IDs informados não existe no sistema.',
+            statusCode: 422,
+          },
+        })
+      }
+      if (prismaError.code === 'P2025') {
+        return reply.status(404).send({
+          error: {
+            code: 'NOT_FOUND',
+            message: 'Registro não encontrado.',
+            statusCode: 404,
+          },
+        })
+      }
+
+      return reply.status(500).send({
+        error: {
+          code: 'DATABASE_ERROR',
+          message: 'Erro ao processar a operação no banco de dados. Tente novamente.',
+          statusCode: 500,
+        },
+      })
+    }
+
+    // Prisma validation error (invalid data)
+    if (error.name === 'PrismaClientValidationError') {
+      fastify.log.error(error)
+      return reply.status(422).send({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Dados inválidos para a operação. Verifique os campos enviados.',
+          statusCode: 422,
+        },
+      })
+    }
+
+    // JWT errors
+    if (error.code === 'FST_JWT_NO_AUTHORIZATION_IN_HEADER' || error.code === 'FST_JWT_AUTHORIZATION_TOKEN_EXPIRED' || error.code === 'FST_JWT_AUTHORIZATION_TOKEN_INVALID') {
+      return reply.status(401).send({
+        error: {
+          code: 'UNAUTHORIZED',
+          message: 'Sessão expirada ou token inválido. Faça login novamente.',
+          statusCode: 401,
+        },
+      })
+    }
+
+    // Connection / network errors
+    if (error.code === 'ECONNREFUSED' || error.code === 'ETIMEDOUT' || error.code === 'ENOTFOUND') {
+      fastify.log.error(error)
+      return reply.status(503).send({
+        error: {
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Serviço temporariamente indisponível. Tente novamente em alguns instantes.',
+          statusCode: 503,
+        },
+      })
+    }
+
+    // Fallback — log full error but return readable message
     fastify.log.error(error)
+    console.error('=== UNHANDLED ERROR ===', error)
+
+    const isDev = env.NODE_ENV === 'development'
     return reply.status(500).send({
       error: {
         code: 'INTERNAL_SERVER_ERROR',
-        message: 'An unexpected error occurred',
+        message: isDev
+          ? `Erro interno: ${error.message}`
+          : 'Ocorreu um erro inesperado. Tente novamente ou entre em contato com o suporte.',
         statusCode: 500,
+        ...(isDev ? { stack: error.stack } : {}),
       },
     })
   })
