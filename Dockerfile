@@ -29,7 +29,7 @@ COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/client
 
 # Expose port
-EXPOSE 3001
+EXPOSE 3002
 
 # Command to run the application
 CMD ["npm", "run", "start"]
