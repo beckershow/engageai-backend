@@ -52,7 +52,7 @@ async function readCache(userId: string, purpose: string, requestHash: string) {
   })
 }
 
-async function writeCache(userId: string, purpose: string, requestHash: string, response: unknown) {
+async function writeCache(userId: string, purpose: string, requestHash: string, response: any) {
   const expiresAt = new Date(Date.now() + CACHE_TTL_HOURS * 60 * 60 * 1000)
   await prisma.aiCache.upsert({
     where: { userId_purpose_model_requestHash: { userId, purpose, model: MODEL, requestHash } },
@@ -124,7 +124,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
     })
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
+      const err = await res.json().catch(() => ({})) as any
       return reply.code(502).send({
         error: {
           code: 'OPENAI_ERROR',
@@ -134,7 +134,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
 
-    const json = await res.json()
+    const json = await res.json() as any
     const content = json?.choices?.[0]?.message?.content
     if (!content) {
       return reply.code(502).send({
@@ -165,7 +165,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
     }
 
     await writeCache(request.user.id, 'training-assist', requestHash, data)
-    await logUsage(request.user.id, 'training-assist', json?.usage, false)
+    await logUsage(request.user.id, 'training-assist', (json as any)?.usage, false)
 
     return reply.send({ data })
   })
@@ -203,7 +203,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
           if (text && text.trim().length > 0) {
             fileContents.push(`Arquivo ${key}:\n${text}`)
           }
-        } catch {}
+        } catch { }
       }
     }
 
@@ -269,7 +269,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
     })
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
+      const err = await res.json().catch(() => ({})) as any
       return reply.code(502).send({
         error: {
           code: 'OPENAI_ERROR',
@@ -279,7 +279,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
 
-    const json = await res.json()
+    const json = await res.json() as any
     const content = json?.choices?.[0]?.message?.content
     if (!content) {
       return reply.code(502).send({
@@ -315,7 +315,7 @@ export async function aiRoutes(fastify: FastifyInstance): Promise<void> {
       })
     }
     await writeCache(request.user.id, 'training-questions', requestHash, { questions })
-    await logUsage(request.user.id, 'training-questions', json?.usage, false)
+    await logUsage(request.user.id, 'training-questions', (json as any)?.usage, false)
 
     return reply.send({ data: { questions } })
   })

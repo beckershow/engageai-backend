@@ -248,22 +248,22 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
         coverUrl: body.capa.valor,
         primaryColor: body.corPrincipal,
         campaignId: body.vinculadoCampanha ? body.campanhaId : null,
-        contentOrigin: body.conteudoOrigem ? contentOriginMap[body.conteudoOrigem] : null,
+        contentOrigin: body.conteudoOrigem ? (contentOriginMap[body.conteudoOrigem] as any) : null,
         contentText: body.conteudoTexto,
         contentFiles,
         noAssessment: body.semAvaliacao,
         convertContent: body.converterConteudo,
-        conversionType: body.tipoConversao ? contentFormatMap[body.tipoConversao] : null,
+        conversionType: body.tipoConversao ? (contentFormatMap[body.tipoConversao] as any) : null,
         allowOriginal: body.disponibilizarOriginal,
         summaryPercent: body.percentualResumo,
         summaryText: body.resumoGerado,
         summaryConfirmed: body.resumoConfirmado,
         aiConfig: body.iaConfig ?? null,
-        aiConversions: mapEnumArray(body.iaConversoes, contentFormatMap),
-        visibleFormats: mapEnumArray(body.colaboradorVe, contentFormatMap),
+        aiConversions: mapEnumArray(body.iaConversoes, contentFormatMap) as any,
+        visibleFormats: mapEnumArray(body.colaboradorVe, contentFormatMap) as any,
         questionsRequired: body.questoesObrigatorias,
         requireSequential: body.ordemObrigatoria,
-        audienceType: audienceTypeMap[body.publicoTipo],
+        audienceType: audienceTypeMap[body.publicoTipo] as any,
         audienceIds: body.colaboradoresSelecionados,
         startDate,
         endDate,
@@ -274,8 +274,8 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
         questions: {
           create: body.questoes.map((q, idx) => ({
             question: q.pergunta,
-            type: questionTypeMap[q.tipo],
-            answerTypes: mapEnumArray(q.tiposResposta, answerTypeMap),
+            type: questionTypeMap[q.tipo] as any,
+            answerTypes: mapEnumArray(q.tiposResposta, answerTypeMap) as any,
             options: q.alternativas ?? [],
             correctOption: q.alternativaCorreta,
             order: q.order ?? idx,
@@ -324,7 +324,10 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string() }).parse(request.params)
 
-    const training = await prisma.training.findUnique({ where: { id } })
+    const training = await prisma.training.findUnique({
+      where: { id },
+      include: { questions: true }
+    })
     if (!training || training.deletedAt) throw new NotFoundError('Training', id)
 
     const existing = await prisma.trainingProgress.findUnique({
@@ -335,28 +338,28 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
       return reply.send({ data: existing })
     }
 
-    if (training.questionsRequired && training.questions.length > 0) {
+    if (training.questionsRequired && (training as any).questions.length > 0) {
       const answeredCount = await prisma.trainingQuestionProgress.count({
         where: { trainingId: id, userId: request.user.id },
       })
-      if (answeredCount < training.questions.length) {
+      if (answeredCount < (training as any).questions.length) {
         throw new ForbiddenError('All questions must be answered before completion')
       }
     }
 
     // Calculate score
     let score = 0
-    if (training.questions.length > 0) {
+    if ((training as any).questions.length > 0) {
       const answers = await prisma.trainingQuestionProgress.findMany({
         where: { trainingId: id, userId: request.user.id },
         select: { questionId: true, answer: true },
       })
-      const questionMap = new Map(training.questions.map((q) => [q.id, q]))
+      const questionMap = new Map((training as any).questions.map((q: any) => [q.id, q]))
       let correct = 0
       let total = 0
 
       answers.forEach((a) => {
-        const q = questionMap.get(a.questionId)
+        const q = questionMap.get(a.questionId) as any
         if (!q || q.correctOption === null || q.correctOption === undefined) return
         total += 1
         const parsed = JSON.parse(a.answer)
@@ -613,15 +616,15 @@ export async function trainingsRoutes(fastify: FastifyInstance): Promise<void> {
           ...updateData,
           questions: body.questoes
             ? {
-                create: body.questoes.map((q, idx) => ({
-                  question: q.pergunta,
-                  type: questionTypeMap[q.tipo],
-                  answerTypes: mapEnumArray(q.tiposResposta, answerTypeMap),
-                  options: q.alternativas ?? [],
-                  correctOption: q.alternativaCorreta,
-                  order: q.order ?? idx,
-                })),
-              }
+              create: body.questoes.map((q, idx) => ({
+                question: q.pergunta,
+                type: questionTypeMap[q.tipo],
+                answerTypes: mapEnumArray(q.tiposResposta, answerTypeMap),
+                options: q.alternativas ?? [],
+                correctOption: q.alternativaCorreta,
+                order: q.order ?? idx,
+              })),
+            }
             : undefined,
         },
         include: { questions: { orderBy: { order: 'asc' } } },

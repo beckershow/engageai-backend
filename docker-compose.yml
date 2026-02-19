@@ -1,0 +1,62 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-3001}:3001"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=postgresql://user:password@db:5432/engageai_db
+      - REDIS_URL=redis://redis:6379
+      - JWT_ACCESS_SECRET=${JWT_ACCESS_SECRET:-min-32-chars-secret-change-in-production}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET:-min-32-chars-refresh-secret-change-in-production}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - engageai-network
+    command: sh -c "npx prisma migrate deploy && npm run start"
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=engageai_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backup_banco.sql:/docker-entrypoint-initdb.d/backup_banco.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d engageai_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - engageai-network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - engageai-network
+
+networks:
+  engageai-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
