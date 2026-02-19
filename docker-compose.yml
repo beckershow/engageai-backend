@@ -18,7 +18,9 @@ services:
         condition: service_healthy
     networks:
       - engageai-network
-    command: sh -c "npx prisma migrate deploy && npm run start"
+    volumes:
+      - ./backup_banco.sql:/app/backup_banco.sql
+    command: sh -c "npx prisma migrate deploy && npx prisma db execute --file /app/backup_banco.sql && npm run start"
 
   db:
     image: postgres:16-alpine
@@ -30,7 +32,6 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./backup_banco.sql:/docker-entrypoint-initdb.d/backup_banco.sql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U user -d engageai_db"]
       interval: 5s
