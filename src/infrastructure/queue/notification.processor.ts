@@ -3,19 +3,10 @@ import { prisma } from '../database/prisma.client.js'
 import { queueConnection, NOTIFICATION_QUEUE, type NotificationJobData } from './bullmq.client.js'
 
 async function processNotificationJob(job: Job<NotificationJobData>): Promise<void> {
-  const { userId, type, title, message, data } = job.data
-
-  await prisma.notification.create({
-    data: {
-      userId,
-      type: type as any,
-      title,
-      message,
-      data: data ? JSON.parse(JSON.stringify(data)) : undefined,
-    },
-  })
-
-  console.log(`[Notification] Created for user ${userId}: ${title}`)
+  // A notificação já foi salva no banco diretamente por enqueueNotification.
+  // Este worker existe apenas para side-effects futuros (e-mail, push, etc.).
+  const { userId, title } = job.data
+  console.log(`[NotificationWorker] Side-effects processed for user ${userId}: ${title}`)
 }
 
 export function createNotificationWorker(): Worker {

@@ -1,5 +1,6 @@
 import { Queue, Worker, type Job } from 'bullmq'
 import { env } from '../../config/env.js'
+import { prisma } from '../database/prisma.client.js'
 
 const redisUrl = new URL(env.REDIS_URL)
 const connection = {
@@ -65,11 +66,21 @@ export async function enqueueGamificationEvent(data: GamificationJobData): Promi
 }
 
 export async function enqueueNotification(data: NotificationJobData): Promise<void> {
-  try {
-    await notificationQueue.add('send-notification', data)
-  } catch (err) {
-    console.warn('[Notification] Queue unavailable, notification dropped:', (err as Error).message)
-  }
+  // Salva diretamente no banco — não depende do Redis/BullMQ estar disponível
+  await prisma.notification.create({
+    data: {
+      userId: data.userId,
+      type: data.type as any,
+      title: data.title,
+      message: data.message,
+      data: data.data ? JSON.parse(JSON.stringify(data.data)) : undefined,
+    },
+  })
+
+  // Tenta enfileirar para processamento assíncrono adicional (ex: e-mail/push no futuro)
+  notificationQueue.add('send-notification', data).catch(() => {
+    // Redis indisponível — silencioso, notificação já está no banco
+  })
 }
 
 export { Worker, type Job }
