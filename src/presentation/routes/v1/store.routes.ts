@@ -541,7 +541,12 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     schema: { tags: ['Store'], summary: "Get store items available to the authenticated user" },
   }, async (request, reply) => {
     const userId = request.user.id
-    const managerId = request.user.managerId
+    let managerId = request.user.managerId
+
+    if (!managerId) {
+      const dbUser = await prisma.user.findUnique({ where: { id: userId }, select: { managerId: true } })
+      managerId = dbUser?.managerId
+    }
 
     if (!managerId) {
       return reply.send({ data: [] })
@@ -587,7 +592,12 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const userId = request.user.id
-    const managerId = request.user.managerId
+    let managerId = request.user.managerId
+
+    if (!managerId) {
+      const dbUser = await prisma.user.findUnique({ where: { id: userId }, select: { managerId: true } })
+      managerId = dbUser?.managerId
+    }
 
     const item = await prisma.storeItem.findUnique({ where: { id } })
     if (!item || item.status !== 'active') {
