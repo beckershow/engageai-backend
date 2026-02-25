@@ -234,6 +234,8 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
       trilhasCompletadas,
       allCourseProgress,
       engagementTracking,
+      trainingCompletions,
+      rewardRedemptions,
     ] = await Promise.all([
       prisma.user.findUnique({ where: { id } }),
       prisma.moodEntry.count({ where: { userId: id } }),
@@ -245,6 +247,8 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
       prisma.engajamentoParticipant.count({ where: { userId: id, status: 'completed' } }),
       prisma.courseProgress.findMany({ where: { userId: id }, select: { completedLessons: true } }),
       prisma.engagementTracking.findUnique({ where: { userId: id }, select: { dailyAccess: true } }),
+      prisma.trainingProgress.count({ where: { userId: id, completedAt: { not: null } } }),
+      prisma.rewardRedemption.count({ where: { userId: id } }),
     ])
 
     if (!user) throw new NotFoundError('User', id)
@@ -267,6 +271,8 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
         trilhasCompletadas,
         modulosFinalizados,
         diasEngajamento,
+        trainingCompletions,
+        rewardRedemptions,
       },
     })
   })
@@ -274,18 +280,22 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
   // GET /users/:id/xp-history
   fastify.get('/:id/xp-history', {
     ...authHooks,
-    schema: { tags: ['Users'], summary: 'Get XP history by month (last 6 months)' },
+    schema: { tags: ['Users'], summary: 'Get XP history by month (filterable by period)' },
   }, async (request, reply) => {
     const { id } = z.object({ id: z.string() }).parse(request.params)
+    const { period } = z.object({
+      period: z.enum(['1m', '3m', '6m', '1y']).default('6m'),
+    }).parse(request.query)
 
-    const sixMonthsAgo = new Date()
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6)
+    const monthsBack = period === '1m' ? 1 : period === '3m' ? 3 : period === '1y' ? 12 : 6
+    const startDate = new Date()
+    startDate.setMonth(startDate.getMonth() - monthsBack)
 
     const logs = await prisma.auditLog.findMany({
       where: {
         actorId: id,
         action: { startsWith: 'gamification.' },
-        createdAt: { gte: sixMonthsAgo },
+        createdAt: { gte: startDate },
       },
       select: { createdAt: true, metadata: true },
       orderBy: { createdAt: 'asc' },
