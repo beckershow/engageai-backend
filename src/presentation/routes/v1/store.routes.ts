@@ -11,7 +11,7 @@ import { AppError } from '../../../shared/errors/app-error.js'
 async function createAuditLog(
   data: { itemId?: string; action: string; performedById: string; metadata?: Record<string, unknown> },
 ) {
-  await prisma.storeAuditLog.create({ data }).catch(() => {})
+  await prisma.storeAuditLog.create({ data }).catch(() => { })
 }
 
 export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
@@ -241,7 +241,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
             title: '🛍️ Novo item no seu estoque!',
             message: `"${item.name}" foi ativado e está disponível no seu estoque da lojinha.`,
             data: { itemId: item.id, itemName: item.name },
-          }).catch(() => {})
+          }).catch(() => { })
         )
       )
 
@@ -261,7 +261,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
         title: '✅ Item criado com sucesso',
         message: `"${item.name}" foi criado e está aguardando ativação.`,
         data: { itemId: item.id },
-      }).catch(() => {})
+      }).catch(() => { })
     }
 
     return reply.send({ data: item })
@@ -300,8 +300,10 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     const { itemId } = request.params as { itemId: string }
     const managerId = request.user.id
 
-    const { status } = z.object({
+    const { status, teamScope, userIds } = z.object({
       status: z.enum(['active_for_team', 'inactive_for_team']),
+      teamScope: z.enum(['all', 'specific']).default('all'),
+      userIds: z.array(z.string()).default([]),
     }).parse(request.body)
 
     const inventoryRecord = await prisma.storeManagerInventory.findUnique({
@@ -319,31 +321,75 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     })
 
     if (status === 'active_for_team') {
-      // Criar visibilidade para todo o time
+      // Remover visibilidade anterior
       await prisma.storeItemTeamVisibility.deleteMany({ where: { itemId, managerId } })
-      await prisma.storeItemTeamVisibility.create({
-        data: { itemId, managerId, teamScope: 'all', userId: null },
-      })
 
-      // Notificar todos os colaboradores do time
-      const team = await prisma.user.findMany({
-        where: { managerId, isActive: true, role: 'colaborador' },
-        select: { id: true },
-      })
+      if (teamScope === 'all') {
+        // Visibilidade para todo o time
+        await prisma.storeItemTeamVisibility.create({
+          data: { itemId, managerId, teamScope: 'all', userId: null },
+        })
 
-      await Promise.all(
-        team.map(member =>
-          enqueueNotification({
-            userId: member.id,
-            type: 'store_item_available_to_team',
-            title: '🎁 Novo item disponível na Lojinha!',
-            message: `"${inventoryRecord.item.name}" já está disponível para resgate na lojinha!`,
-            data: { itemId, itemName: inventoryRecord.item.name },
-          }).catch(() => {})
+        // Notificar todos os colaboradores do time
+        const team = await prisma.user.findMany({
+          where: { managerId, isActive: true, role: 'colaborador' },
+          select: { id: true },
+        })
+
+        await Promise.all(
+          team.map(member =>
+            enqueueNotification({
+              userId: member.id,
+              type: 'store_item_available_to_team',
+              title: '🎁 Novo item disponível na Lojinha!',
+              message: `"${inventoryRecord.item.name}" já está disponível para resgate na lojinha!`,
+              data: { itemId, itemName: inventoryRecord.item.name },
+            }).catch(() => { })
+          )
         )
-      )
+      } else if (teamScope === 'specific' && userIds.length > 0) {
+        // Garantir que os usuários selecionados pertencem ao gestor
+        const validUsers = await prisma.user.findMany({
+          where: {
+            id: { in: userIds },
+            managerId,
+            isActive: true,
+            role: 'colaborador'
+          },
+          select: { id: true }
+        })
 
-      await createAuditLog({ itemId, action: 'manager_item_activated', performedById: managerId, metadata: { itemName: inventoryRecord.item.name } })
+        const validUserIds = validUsers.map(u => u.id)
+
+        if (validUserIds.length === 0) {
+          throw new AppError('Nenhum usuário válido do seu time foi selecionado', 400, 'BAD_REQUEST')
+        }
+
+        // Visibilidade para usuários específicos
+        await prisma.storeItemTeamVisibility.createMany({
+          data: validUserIds.map(userId => ({
+            itemId,
+            managerId,
+            userId,
+            teamScope: 'specific' as const,
+          })),
+        })
+
+        // Notificar apenas os usuários selecionados válidos
+        await Promise.all(
+          validUserIds.map(userId =>
+            enqueueNotification({
+              userId,
+              type: 'store_item_available_to_team',
+              title: '🎁 Novo item disponível na Lojinha!',
+              message: `"${inventoryRecord.item.name}" foi disponibilizado para você na lojinha!`,
+              data: { itemId, itemName: inventoryRecord.item.name },
+            }).catch(() => { })
+          )
+        )
+      }
+
+      await createAuditLog({ itemId, action: 'manager_item_activated', performedById: managerId, metadata: { itemName: inventoryRecord.item.name, teamScope, userIds } })
     } else {
       // Remover visibilidade
       await prisma.storeItemTeamVisibility.deleteMany({ where: { itemId, managerId } })
@@ -434,13 +480,30 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
             title: '🎁 Novo item disponível na Lojinha!',
             message: `"${item.name}" já está disponível para resgate na lojinha!`,
             data: { itemId: item.id, itemName: item.name },
-          }).catch(() => {})
+          }).catch(() => { })
         )
       )
     } else if (scope === 'specific' && userIds.length > 0) {
+      // Garantir que os usuários selecionados pertencem ao gestor
+      const validUsers = await prisma.user.findMany({
+        where: {
+          id: { in: userIds },
+          managerId,
+          isActive: true,
+          role: 'colaborador'
+        },
+        select: { id: true }
+      })
+
+      const validUserIds = validUsers.map(u => u.id)
+
+      if (validUserIds.length === 0) {
+        throw new AppError('Nenhum usuário válido do seu time foi selecionado', 400, 'BAD_REQUEST')
+      }
+
       // Um registro por usuário específico
       await prisma.storeItemTeamVisibility.createMany({
-        data: userIds.map(userId => ({
+        data: validUserIds.map(userId => ({
           itemId: id,
           managerId,
           userId,
@@ -450,14 +513,14 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
 
       // Notificar usuários específicos
       await Promise.all(
-        userIds.map(userId =>
+        validUserIds.map(userId =>
           enqueueNotification({
             userId,
             type: 'store_item_available_to_team',
             title: '🎁 Novo item disponível na Lojinha!',
             message: `"${item.name}" foi disponibilizado para você na lojinha!`,
             data: { itemId: item.id, itemName: item.name },
-          }).catch(() => {})
+          }).catch(() => { })
         )
       )
     }
@@ -563,9 +626,9 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       }),
       ...(item.quantity !== null
         ? [prisma.storeItem.update({
-            where: { id },
-            data: { quantity: { decrement: 1 } },
-          })]
+          where: { id },
+          data: { quantity: { decrement: 1 } },
+        })]
         : []),
     ])
 
@@ -577,7 +640,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
         title: '🛍️ Resgate realizado',
         message: `${user.nome} resgatou "${item.name}" na lojinha.`,
         data: { itemId: item.id, userId, redemptionId: redemption.id },
-      }).catch(() => {})
+      }).catch(() => { })
     }
 
     await createAuditLog({ itemId: id, action: 'item_redeemed', performedById: userId, metadata: { itemName: item.name, userId } })
@@ -655,7 +718,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
         ? `Seu resgate de "${redemption.item.name}" foi confirmado!`
         : `Seu resgate de "${redemption.item.name}" foi cancelado.`,
       data: { redemptionId: id, itemId: redemption.itemId },
-    }).catch(() => {})
+    }).catch(() => { })
 
     await createAuditLog({ itemId: redemption.itemId, action: 'redemption_status_updated', performedById: request.user.id, metadata: { redemptionId: id, status } })
 
@@ -699,7 +762,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
           title: '📋 Solicitação de recompensa',
           message: `Um gestor solicitou a recompensa "${body.name}".`,
           data: { requestId: rewardRequest.id, name: body.name },
-        }).catch(() => {})
+        }).catch(() => { })
       )
     )
 
@@ -727,6 +790,63 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     return reply.send({ data: requests })
   })
 
+  // PATCH /store/reward-requests/:id — gestor re-edita solicitação rejeitada
+  fastify.patch('/reward-requests/:id', {
+    preHandler: [authenticate, authorize(['gestor'])],
+    schema: { tags: ['Store'], summary: 'Edit rejected reward request (gestor)' },
+  }, async (request, reply) => {
+    const { id } = request.params as { id: string }
+
+    const body = z.object({
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().min(1).max(2000).optional(),
+      category: z.string().min(1).max(100).optional(),
+      estimatedStarCost: z.number().int().min(0).optional(),
+      justification: z.string().min(1).max(2000).optional(),
+    }).parse(request.body)
+
+    const existing = await prisma.storeRewardRequest.findUnique({ where: { id } })
+    if (!existing) throw new AppError('Solicitação não encontrada', 404, 'NOT_FOUND')
+    if (existing.managerId !== request.user.id) throw new AppError('Sem permissão', 403, 'FORBIDDEN')
+    if (existing.status !== 'rejected') throw new AppError('Apenas solicitações rejeitadas podem ser re-editadas', 400, 'INVALID_STATUS')
+
+    const updated = await prisma.storeRewardRequest.update({
+      where: { id },
+      data: {
+        ...body,
+        status: 'pending',
+        reviewNote: null,
+        reviewedById: null,
+        reviewedAt: null,
+      },
+      include: {
+        manager: { select: { id: true, nome: true } },
+      },
+    })
+
+    // Notificar super_admins sobre a re-submissão
+    const superAdmins = await prisma.user.findMany({
+      where: { role: 'super_admin', isActive: true },
+      select: { id: true },
+    })
+
+    await Promise.all(
+      superAdmins.map(admin =>
+        enqueueNotification({
+          userId: admin.id,
+          type: 'store_reward_requested',
+          title: '📋 Solicitação de recompensa re-enviada',
+          message: `O gestor reenviou a solicitação "${updated.name}" após ajustes.`,
+          data: { requestId: updated.id, name: updated.name, resubmitted: true },
+        }).catch(() => { })
+      )
+    )
+
+    await createAuditLog({ action: 'reward_request_resubmitted', performedById: request.user.id, metadata: { requestId: id, name: updated.name } })
+
+    return reply.send({ data: updated })
+  })
+
   // PATCH /store/reward-requests/:id/review — super_admin revisa solicitação
   fastify.patch('/reward-requests/:id/review', {
     preHandler: [authenticate, authorize(['super_admin'])],
@@ -734,9 +854,14 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
   }, async (request, reply) => {
     const { id } = request.params as { id: string }
 
-    const { status, reviewNote } = z.object({
+    const { status, reviewNote, name, description, category, estimatedStarCost } = z.object({
       status: z.enum(['approved', 'rejected', 'converted']),
       reviewNote: z.string().max(1000).optional(),
+      // Campos editáveis: superadmin pode alterar antes de aprovar
+      name: z.string().min(1).max(200).optional(),
+      description: z.string().min(1).max(2000).optional(),
+      category: z.string().min(1).max(100).optional(),
+      estimatedStarCost: z.number().int().min(0).optional(),
     }).parse(request.body)
 
     const existing = await prisma.storeRewardRequest.findUnique({ where: { id } })
@@ -749,6 +874,11 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
         reviewNote: reviewNote ?? null,
         reviewedById: request.user.id,
         reviewedAt: new Date(),
+        // Aplicar campos editáveis se fornecidos
+        ...(name !== undefined && { name }),
+        ...(description !== undefined && { description }),
+        ...(category !== undefined && { category }),
+        ...(estimatedStarCost !== undefined && { estimatedStarCost }),
       },
       include: {
         manager: { select: { id: true, nome: true } },
@@ -760,11 +890,11 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       userId: existing.managerId,
       type: 'store_reward_request_reviewed',
       title: status === 'approved' ? '✅ Solicitação aprovada!' : status === 'rejected' ? '❌ Solicitação recusada' : '🔄 Solicitação convertida',
-      message: `Sua solicitação "${existing.name}" foi ${status === 'approved' ? 'aprovada' : status === 'rejected' ? 'recusada' : 'convertida em item'}.`,
+      message: `Sua solicitação "${existing.name}" foi ${status === 'approved' ? 'aprovada' : status === 'rejected' ? 'recusada' : 'convertida em item'}.${reviewNote ? ` Nota: ${reviewNote}` : ''}`,
       data: { requestId: id, status, reviewNote },
-    }).catch(() => {})
+    }).catch(() => { })
 
-    await createAuditLog({ action: 'reward_request_reviewed', performedById: request.user.id, metadata: { requestId: id, status, name: existing.name } })
+    await createAuditLog({ action: 'reward_request_reviewed', performedById: request.user.id, metadata: { requestId: id, status, name: updated.name } })
 
     return reply.send({ data: updated })
   })
