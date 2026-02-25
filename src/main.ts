@@ -217,7 +217,6 @@ async function build() {
 
   // API v1 routes
   const V1_PREFIX = '/api/v1'
-
   await fastify.register(authRoutes, { prefix: `${V1_PREFIX}/auth` })
   await fastify.register(usersRoutes, { prefix: `${V1_PREFIX}/users` })
   await fastify.register(moodRoutes, { prefix: `${V1_PREFIX}/mood` })

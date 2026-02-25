@@ -584,7 +584,6 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
 
     return reply.send({ data: items })
   })
-
   // POST /store/items/:id/redeem — resgatar item
   fastify.post('/items/:id/redeem', {
     preHandler: [authenticate],
