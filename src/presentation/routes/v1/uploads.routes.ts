@@ -1,19 +1,28 @@
 import type { FastifyInstance } from 'fastify'
-import { z } from 'zod'
 import { authenticate } from '../../middlewares/authenticate.js'
 import { authorize } from '../../middlewares/authorize.js'
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3'
 import { env } from '../../../config/env.js'
+import { processImage } from '../../../infrastructure/media/image.processor.js'
 
 function sanitizeFilename(name: string) {
   return name.replace(/[^a-zA-Z0-9._-]/g, '_')
 }
 
 export async function uploadsRoutes(fastify: FastifyInstance): Promise<void> {
-  // POST /uploads (gestor+) - multipart upload via backend
+  // POST /uploads?folder=trainings (gestor+) - multipart upload via backend com compressão de imagem
   fastify.post('/', {
     preHandler: [authenticate, authorize(['gestor'])],
-    schema: { tags: ['Uploads'], summary: 'Upload file (gestor+)' },
+    schema: {
+      tags: ['Uploads'],
+      summary: 'Upload de imagem com compressão automática (gestor+)',
+      querystring: {
+        type: 'object',
+        properties: {
+          folder: { type: 'string', description: 'Pasta no R2 (default: trainings)' },
+        },
+      },
+    },
   }, async (request, reply) => {
     if (!request.isMultipart()) {
       return reply.code(400).send({
@@ -24,12 +33,26 @@ export async function uploadsRoutes(fastify: FastifyInstance): Promise<void> {
     const file = await request.file()
     if (!file) {
       return reply.code(400).send({
-        error: { code: 'BAD_REQUEST', message: 'File is required', statusCode: 400 },
+        error: { code: 'BAD_REQUEST', message: 'Arquivo é obrigatório', statusCode: 400 },
       })
     }
 
-    const safeName = sanitizeFilename(file.filename)
-    const key = `trainings/${request.user.id}/${Date.now()}-${safeName}`
+    // Ler o buffer completo
+    const chunks: Buffer[] = []
+    for await (const chunk of file.file) {
+      chunks.push(chunk)
+    }
+    const rawBuffer = Buffer.concat(chunks)
+
+    // Processar (validar tipo/tamanho e comprimir)
+    const processed = await processImage(rawBuffer, file.mimetype)
+
+    // Determinar pasta de destino
+    const query = request.query as { folder?: string }
+    const folder = query.folder?.replace(/[^a-zA-Z0-9_-]/g, '') || 'trainings'
+
+    const safeName = sanitizeFilename(file.filename).replace(/\.[^.]+$/, '')
+    const key = `${folder}/${request.user.id}/${Date.now()}-${safeName}.${processed.extension}`
 
     const r2Client = new S3Client({
       region: env.R2_REGION,
@@ -46,8 +69,8 @@ export async function uploadsRoutes(fastify: FastifyInstance): Promise<void> {
     await r2Client.send(new PutObjectCommand({
       Bucket: env.R2_BUCKET,
       Key: key,
-      Body: file.file,
-      ContentType: file.mimetype || 'application/octet-stream',
+      Body: processed.buffer,
+      ContentType: processed.mimetype,
     }))
 
     return reply.send({ data: { key, filename: file.filename } })

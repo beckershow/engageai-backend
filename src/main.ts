@@ -24,6 +24,7 @@ import { analyticsRoutes } from './presentation/routes/v1/analytics.routes.js'
 import { notificationsRoutes } from './presentation/routes/v1/notifications.routes.js'
 import { aiRoutes } from './presentation/routes/v1/ai.routes.js'
 import { uploadsRoutes } from './presentation/routes/v1/uploads.routes.js'
+import { storeRoutes } from './presentation/routes/v1/store.routes.js'
 import { AppError } from './shared/errors/app-error.js'
 import { createGamificationWorker } from './infrastructure/queue/gamification.processor.js'
 import { createNotificationWorker } from './infrastructure/queue/notification.processor.js'
@@ -36,7 +37,7 @@ async function build() {
         ? { target: 'pino-pretty', options: { colorize: true } }
         : undefined,
     },
-    bodyLimit: 5 * 1024 * 1024, // 5MB to accommodate large JSON payloads
+    bodyLimit: 25 * 1024 * 1024, // 25MB — suporta uploads de imagem (max 20MB + overhead)
   })
 
   // Global error handler
@@ -235,6 +236,7 @@ async function build() {
   await fastify.register(notificationsRoutes, { prefix: `${V1_PREFIX}/notifications` })
   await fastify.register(aiRoutes, { prefix: `${V1_PREFIX}/ai` })
   await fastify.register(uploadsRoutes, { prefix: `${V1_PREFIX}/uploads` })
+  await fastify.register(storeRoutes, { prefix: `${V1_PREFIX}/store` })
 
   return fastify
 }

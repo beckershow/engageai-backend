@@ -61,6 +61,15 @@ model User {
   createdTrainings          Training[]                 @relation("TrainingCreator")
   manager                   User?                      @relation("ManagerTeam", fields: [managerId], references: [id])
   team                      User[]                     @relation("ManagerTeam")
+  createdStoreItems         StoreItem[]                @relation("StoreItemCreator")
+  storeManagerVisibility    StoreItemManagerVisibility[] @relation("StoreManagerUser")
+  storeTeamVisibilityManager StoreItemTeamVisibility[] @relation("StoreTeamManager")
+  storeTeamVisibilityUser   StoreItemTeamVisibility[]  @relation("StoreTeamUser")
+  storeRedemptions          StoreRedemption[]
+  managerInventory          StoreManagerInventory[]    @relation("ManagerInventory")
+  rewardRequests            StoreRewardRequest[]       @relation("RewardRequester")
+  reviewedRequests          StoreRewardRequest[]       @relation("RewardReviewer")
+  storeAuditLogs            StoreAuditLog[]            @relation("AuditPerformer")
 
   @@map("users")
 }
@@ -473,6 +482,123 @@ model GestorFeedConfig {
   @@map("gestor_feed_configs")
 }
 
+// ─── Lojinha / Recompensas ────────────────────────────────────────────────────
+
+model StoreItemCategory {
+  id    String      @id @default(cuid())
+  name  String      @unique
+  items StoreItem[]
+
+  @@map("store_item_categories")
+}
+
+model StoreItem {
+  id                String                      @id @default(cuid())
+  name              String
+  categoryId        String
+  description       String
+  costStars         Int                         @default(0)
+  quantity          Int?
+  imageUrl          String?
+  internalNotes     String?
+  status            StoreItemStatus             @default(draft)
+  createdById       String
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+  category          StoreItemCategory           @relation(fields: [categoryId], references: [id])
+  createdBy         User                        @relation("StoreItemCreator", fields: [createdById], references: [id])
+  managerVisibility StoreItemManagerVisibility[]
+  teamVisibility    StoreItemTeamVisibility[]
+  redemptions       StoreRedemption[]
+  managerInventory  StoreManagerInventory[]
+  auditLogs         StoreAuditLog[]
+
+  @@map("store_items")
+}
+
+model StoreItemManagerVisibility {
+  id        String    @id @default(cuid())
+  itemId    String
+  managerId String
+  item      StoreItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  manager   User      @relation("StoreManagerUser", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, managerId])
+  @@map("store_item_manager_visibility")
+}
+
+model StoreItemTeamVisibility {
+  id        String         @id @default(cuid())
+  itemId    String
+  managerId String
+  userId    String?
+  teamScope StoreTeamScope @default(all)
+  item      StoreItem      @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  manager   User           @relation("StoreTeamManager", fields: [managerId], references: [id], onDelete: Cascade)
+  user      User?          @relation("StoreTeamUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("store_item_team_visibility")
+}
+
+model StoreRedemption {
+  id         String    @id @default(cuid())
+  itemId     String
+  userId     String
+  status     String    @default("pending")
+  redeemedAt DateTime  @default(now())
+  item       StoreItem @relation(fields: [itemId], references: [id])
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("store_redemptions")
+}
+
+model StoreManagerInventory {
+  id          String                      @id @default(cuid())
+  itemId      String
+  managerId   String
+  status      StoreManagerInventoryStatus @default(in_stock)
+  activatedAt DateTime?
+  item        StoreItem                   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  manager     User                        @relation("ManagerInventory", fields: [managerId], references: [id], onDelete: Cascade)
+
+  @@unique([itemId, managerId])
+  @@map("store_manager_inventory")
+}
+
+model StoreRewardRequest {
+  id                String                   @id @default(cuid())
+  managerId         String
+  name              String
+  description       String
+  category          String
+  estimatedStarCost Int                      @default(0)
+  justification     String
+  status            StoreRewardRequestStatus @default(pending)
+  reviewNote        String?
+  reviewedById      String?
+  reviewedAt        DateTime?
+  convertedItemId   String?
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+  manager           User                     @relation("RewardRequester", fields: [managerId], references: [id])
+  reviewedBy        User?                    @relation("RewardReviewer", fields: [reviewedById], references: [id])
+
+  @@map("store_reward_requests")
+}
+
+model StoreAuditLog {
+  id            String     @id @default(cuid())
+  itemId        String?
+  action        String
+  performedById String
+  metadata      Json?
+  createdAt     DateTime   @default(now())
+  item          StoreItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  performedBy   User       @relation("AuditPerformer", fields: [performedById], references: [id])
+
+  @@map("store_audit_logs")
+}
+
 model MoodEntry {
   id        String   @id @default(cuid())
   userId    String
@@ -876,6 +1002,31 @@ enum FeedPostStatus {
   rejected
 }
 
+enum StoreItemStatus {
+  draft
+  created
+  active
+  inactive
+}
+
+enum StoreTeamScope {
+  all
+  specific
+}
+
+enum StoreManagerInventoryStatus {
+  in_stock
+  active_for_team
+  inactive_for_team
+}
+
+enum StoreRewardRequestStatus {
+  pending
+  approved
+  rejected
+  converted
+}
+
 enum NotificationType {
   xp_gained
   level_up
@@ -893,6 +1044,15 @@ enum NotificationType {
   post_rejected
   post_liked
   post_commented
+  store_item_created
+  store_item_activated
+  store_item_available_to_manager
+  store_item_available_to_team
+  store_item_sent_to_manager
+  store_manager_item_activated
+  store_manager_item_deactivated
+  store_reward_requested
+  store_reward_request_reviewed
 }
 
 enum NotificationStatus {
