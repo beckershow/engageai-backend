@@ -44,6 +44,7 @@ export async function refreshTokenUseCase(
     email: existing.user.email,
     role: existing.user.role,
     nome: existing.user.nome,
+    managerId: existing.user.managerId ?? null,
   })
 
   // New refresh token

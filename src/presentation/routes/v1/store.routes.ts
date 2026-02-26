@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { Prisma } from '@prisma/client'
 import { z } from 'zod'
 import { prisma } from '../../../infrastructure/database/prisma.client.js'
 import { authenticate } from '../../middlewares/authenticate.js'
@@ -9,7 +10,7 @@ import { AppError } from '../../../shared/errors/app-error.js'
 // ─── Helper de Auditoria ─────────────────────────────────────────────────────
 
 async function createAuditLog(
-  data: { itemId?: string; action: string; performedById: string; metadata?: Record<string, unknown> },
+  data: { itemId?: string; action: string; performedById: string; metadata?: Prisma.InputJsonValue },
 ) {
   await prisma.storeAuditLog.create({ data }).catch(() => { })
 }

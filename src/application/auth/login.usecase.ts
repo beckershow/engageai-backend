@@ -73,6 +73,7 @@ export async function loginUseCase(
     email: user.email,
     role: user.role,
     nome: user.nome,
+    managerId: user.managerId ?? null,
   })
 
   // Generate refresh token (opaque)

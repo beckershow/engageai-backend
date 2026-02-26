@@ -61,6 +61,7 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
       role: z.enum(['super_admin', 'gestor', 'colaborador']).optional(),
       departamento: z.string().optional(),
       search: z.string().optional(),
+      managerId: z.string().optional(),
     }).parse(request.query)
 
     const { skip, take, page, limit } = getPaginationParams(query)
@@ -68,6 +69,7 @@ export async function usersRoutes(fastify: FastifyInstance): Promise<void> {
     const where = {
       isActive: true,
       ...(query.role && { role: query.role }),
+      ...(query.managerId && { managerId: query.managerId }),
       ...(query.departamento && { departamento: query.departamento }),
       ...(query.search && {
         OR: [
