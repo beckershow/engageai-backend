@@ -243,21 +243,18 @@ async function build() {
 async function main() {
   const fastify = await build()
 
-  // Start BullMQ workers (only in non-test env)
+  // BullMQ Workers disabled (Redis required)
+  /*
   if (env.NODE_ENV !== 'test') {
-    const gamificationWorker = createGamificationWorker()
-    const notificationWorker = createNotificationWorker()
-
-    gamificationWorker.on('completed', (job) => {
-      fastify.log.info(`[GamificationWorker] Job ${job.id} completed`)
-    })
-    gamificationWorker.on('failed', (job, err) => {
-      fastify.log.error(`[GamificationWorker] Job ${job?.id} failed: ${err.message}`)
-    })
-    notificationWorker.on('failed', (job, err) => {
-      fastify.log.error(`[NotificationWorker] Job ${job?.id} failed: ${err.message}`)
-    })
+    try {
+      const gamificationWorker = createGamificationWorker()
+      const notificationWorker = createNotificationWorker()
+      // ... event handlers
+    } catch (err: any) {
+      fastify.log.warn(`[Queue] Failed to initialize BullMQ workers: ${err.message}`)
+    }
   }
+  */
 
   try {
     await fastify.listen({ port: env.PORT, host: '0.0.0.0' })

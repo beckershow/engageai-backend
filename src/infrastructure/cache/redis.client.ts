@@ -2,12 +2,13 @@ import Redis from 'ioredis'
 import { env } from '../../config/env.js'
 
 export const redis = new Redis(env.REDIS_URL, {
-  maxRetriesPerRequest: 1,
+  maxRetriesPerRequest: 0,
   enableReadyCheck: false,
   lazyConnect: true,
   retryStrategy: (times: number) => {
-    if (times > 3) return null // stop retrying
-    return Math.min(times * 1000, 3000)
+    // No ambiente local, se o Redis não estiver rodando, não queremos travar o boot do app
+    console.warn('[Redis] Connection failed, disabling retry for this session.')
+    return null // stop retrying permanently
   },
 })
 

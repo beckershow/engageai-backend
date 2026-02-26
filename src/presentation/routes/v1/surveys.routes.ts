@@ -23,7 +23,6 @@ const CreateSurveySchema = z.object({
   rewardXP: z.number().int().min(0).default(40),
   targetAudience: z.enum(['todo_time', 'colaboradores_especificos', 'por_departamento']).default('todo_time'),
   targetIds: z.array(z.string()).default([]),
-  isAnonymous: z.boolean().default(false),
   questions: z.array(QuestionSchema).min(1),
 })
 
@@ -235,14 +234,6 @@ export async function surveysRoutes(fastify: FastifyInstance): Promise<void> {
     })
     if (!survey) throw new NotFoundError('Survey', id)
 
-    // For anonymous surveys, hide user info from responses
-    const result = survey.isAnonymous
-      ? {
-          ...survey,
-          responses: survey.responses.map(r => ({ ...r, user: undefined })),
-        }
-      : survey
-
-    return reply.send({ data: result })
+    return reply.send({ data: survey })
   })
 }

@@ -15,30 +15,11 @@ const connection = {
 export const GAMIFICATION_QUEUE = 'gamification'
 export const NOTIFICATION_QUEUE = 'notifications'
 
-// Gamification queue
-export const gamificationQueue = new Queue(GAMIFICATION_QUEUE, {
-  connection,
-  defaultJobOptions: {
-    attempts: 3,
-    backoff: {
-      type: 'exponential',
-      delay: 1000,
-    },
-    removeOnComplete: 100,
-    removeOnFail: 50,
-  },
-})
-
-// Notification queue
-export const notificationQueue = new Queue(NOTIFICATION_QUEUE, {
-  connection,
-  defaultJobOptions: {
-    attempts: 2,
-    backoff: { type: 'fixed', delay: 2000 },
-    removeOnComplete: 50,
-    removeOnFail: 20,
-  },
-})
+// BullMQ Queues Disabled (Redis Required)
+/*
+export const gamificationQueue = new Queue(...)
+export const notificationQueue = new Queue(...)
+*/
 
 export interface GamificationJobData {
   userId: string
@@ -57,12 +38,8 @@ export interface NotificationJobData {
 }
 
 export async function enqueueGamificationEvent(data: GamificationJobData): Promise<void> {
-  try {
-    await gamificationQueue.add('award-xp', data)
-  } catch (err) {
-    // Redis unavailable - log warning but don't block HTTP response
-    console.warn('[Gamification] Queue unavailable, XP event dropped:', (err as Error).message)
-  }
+  // BullMQ disabled - no-op
+  console.log('[Gamification] Queue disabled, XP event skipped')
 }
 
 export async function enqueueNotification(data: NotificationJobData): Promise<void> {
@@ -77,11 +54,9 @@ export async function enqueueNotification(data: NotificationJobData): Promise<vo
     },
   })
 
-  // Tenta enfileirar para processamento assíncrono adicional (ex: e-mail/push no futuro)
-  notificationQueue.add('send-notification', data).catch(() => {
-    // Redis indisponível — silencioso, notificação já está no banco
-  })
+  // BullMQ disabled - no-op for async processing
+  console.log('[Notification] Notification saved to DB, async processing skipped')
 }
 
 export { Worker, type Job }
-export { connection as queueConnection }
+export const queueConnection = connection

@@ -91,8 +91,11 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       quantity: z.number().int().positive().nullable().default(null),
       imageUrl: z.string().nullable().default(null),
       internalNotes: z.string().max(1000).nullable().default(null),
+      allowMultipleRedemptions: z.boolean().default(false),
+      maxRedemptionsPerUser: z.number().int().min(2).nullable().default(null),
       status: z.enum(['draft', 'created']).default('draft'),
       managerIds: z.array(z.string()).default([]), // vazio = todos os gestores
+      fromRequestId: z.string().optional(), // para linkar solicitação de origem
     }).parse(request.body)
 
     const item = await prisma.storeItem.create({
@@ -104,6 +107,8 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
         quantity: body.quantity,
         imageUrl: body.imageUrl,
         internalNotes: body.internalNotes,
+        allowMultipleRedemptions: body.allowMultipleRedemptions,
+        maxRedemptionsPerUser: body.maxRedemptionsPerUser,
         status: body.status,
         createdById: request.user.id,
         ...(body.managerIds.length > 0 && {
@@ -119,6 +124,20 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     })
 
     await createAuditLog({ itemId: item.id, action: 'item_created', performedById: request.user.id, metadata: { name: item.name } })
+
+    // Se criado a partir de uma solicitação, atualizar status e registrar audit
+    if (body.fromRequestId) {
+      await createAuditLog({
+        itemId: item.id,
+        action: 'item_created_from_request',
+        performedById: request.user.id,
+        metadata: { requestId: body.fromRequestId, name: item.name } as Prisma.InputJsonValue,
+      })
+      await prisma.storeRewardRequest.update({
+        where: { id: body.fromRequestId },
+        data: { status: 'converted', convertedItemId: item.id },
+      }).catch(() => { })
+    }
 
     return reply.code(201).send({ data: item })
   })
@@ -138,6 +157,8 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       quantity: z.number().int().positive().nullable().optional(),
       imageUrl: z.string().nullable().optional(),
       internalNotes: z.string().max(1000).nullable().optional(),
+      allowMultipleRedemptions: z.boolean().optional(),
+      maxRedemptionsPerUser: z.number().int().min(2).nullable().optional(),
       managerIds: z.array(z.string()).optional(),
     }).parse(request.body)
 
@@ -609,6 +630,27 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       throw new AppError('Item esgotado', 409, 'OUT_OF_STOCK')
     }
 
+    // Verificar limite de resgates por usuário
+    if (!item.allowMultipleRedemptions) {
+      const existingRedemption = await prisma.storeRedemption.findFirst({
+        where: { itemId: id, userId, status: { not: 'cancelled' } },
+      })
+      if (existingRedemption) {
+        throw new AppError('Você já resgatou este item anteriormente', 409, 'ALREADY_REDEEMED')
+      }
+    } else if (item.maxRedemptionsPerUser !== null) {
+      const count = await prisma.storeRedemption.count({
+        where: { itemId: id, userId, status: { not: 'cancelled' } },
+      })
+      if (count >= item.maxRedemptionsPerUser) {
+        throw new AppError(
+          `Você atingiu o limite de ${item.maxRedemptionsPerUser} resgates para este item`,
+          409,
+          'REDEMPTION_LIMIT_REACHED',
+        )
+      }
+    }
+
     // Verificar estrelas do usuário
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -748,6 +790,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       category: z.string().min(1).max(100),
       estimatedStarCost: z.number().int().min(0).default(0),
       justification: z.string().min(1).max(2000),
+      imageUrl: z.string().nullable().default(null),
     }).parse(request.body)
 
     const rewardRequest = await prisma.storeRewardRequest.create({
@@ -777,6 +820,7 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     )
 
     await createAuditLog({ action: 'reward_requested', performedById: request.user.id, metadata: { name: body.name, requestId: rewardRequest.id } })
+    await createAuditLog({ action: 'reward_request_created', performedById: request.user.id, metadata: { name: body.name, requestId: rewardRequest.id } })
 
     return reply.code(201).send({ data: rewardRequest })
   })
@@ -813,12 +857,15 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       category: z.string().min(1).max(100).optional(),
       estimatedStarCost: z.number().int().min(0).optional(),
       justification: z.string().min(1).max(2000).optional(),
+      imageUrl: z.string().nullable().optional(),
     }).parse(request.body)
 
     const existing = await prisma.storeRewardRequest.findUnique({ where: { id } })
     if (!existing) throw new AppError('Solicitação não encontrada', 404, 'NOT_FOUND')
     if (existing.managerId !== request.user.id) throw new AppError('Sem permissão', 403, 'FORBIDDEN')
-    if (existing.status !== 'rejected') throw new AppError('Apenas solicitações rejeitadas podem ser re-editadas', 400, 'INVALID_STATUS')
+    if (existing.status !== 'rejected' && existing.status !== 'refused') {
+      throw new AppError('Apenas solicitações recusadas podem ser re-editadas', 400, 'INVALID_STATUS')
+    }
 
     const updated = await prisma.storeRewardRequest.update({
       where: { id },
@@ -865,9 +912,9 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
     const { id } = request.params as { id: string }
 
     const { status, reviewNote, name, description, category, estimatedStarCost } = z.object({
-      status: z.enum(['approved', 'rejected', 'converted']),
+      status: z.enum(['approved', 'rejected', 'refused', 'proceeded', 'converted']),
       reviewNote: z.string().max(1000).optional(),
-      // Campos editáveis: superadmin pode alterar antes de aprovar
+      // Campos editáveis: superadmin pode alterar antes de decidir
       name: z.string().min(1).max(200).optional(),
       description: z.string().min(1).max(2000).optional(),
       category: z.string().min(1).max(100).optional(),
@@ -895,16 +942,38 @@ export async function storeRoutes(fastify: FastifyInstance): Promise<void> {
       },
     })
 
+    // Mensagem da notificação por status
+    const statusMsgMap: Record<string, string> = {
+      approved: 'aprovada',
+      rejected: 'recusada',
+      refused: 'recusada',
+      proceeded: 'em progresso — o item será criado em breve',
+      converted: 'convertida em item',
+    }
+    const statusTitle = status === 'refused' || status === 'rejected'
+      ? '❌ Solicitação recusada'
+      : status === 'proceeded'
+        ? '🔄 Solicitação em progresso'
+        : status === 'approved'
+          ? '✅ Solicitação aprovada!'
+          : '🔄 Solicitação convertida'
+
     // Notificar o gestor
     await enqueueNotification({
       userId: existing.managerId,
       type: 'store_reward_request_reviewed',
-      title: status === 'approved' ? '✅ Solicitação aprovada!' : status === 'rejected' ? '❌ Solicitação recusada' : '🔄 Solicitação convertida',
-      message: `Sua solicitação "${existing.name}" foi ${status === 'approved' ? 'aprovada' : status === 'rejected' ? 'recusada' : 'convertida em item'}.${reviewNote ? ` Nota: ${reviewNote}` : ''}`,
+      title: statusTitle,
+      message: `Sua solicitação "${existing.name}" foi ${statusMsgMap[status] ?? status}.${reviewNote ? ` Nota: ${reviewNote}` : ''}`,
       data: { requestId: id, status, reviewNote },
     }).catch(() => { })
 
+    // Audit logs específicos
     await createAuditLog({ action: 'reward_request_reviewed', performedById: request.user.id, metadata: { requestId: id, status, name: updated.name } })
+    if (status === 'refused') {
+      await createAuditLog({ action: 'reward_request_refused', performedById: request.user.id, metadata: { requestId: id, name: updated.name, reviewNote } })
+    } else if (status === 'proceeded') {
+      await createAuditLog({ action: 'reward_request_proceeded', performedById: request.user.id, metadata: { requestId: id, name: updated.name } })
+    }
 
     return reply.send({ data: updated })
   })

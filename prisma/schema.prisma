@@ -43,9 +43,11 @@ model User {
   feedPosts                 FeedPost[]
   feedReactions             FeedReaction[]
   feedPostViews             FeedPostView[]
-  gestorFeedConfig          GestorFeedConfig?
+  gestorFeedbackConfig      GestorFeedbackConfig?
   feedbacksSent             Feedback[]                 @relation("FeedbackFrom")
   feedbacksReceived         Feedback[]                 @relation("FeedbackTo")
+  feedbackRequestsSent      FeedbackRequest[]          @relation("FeedbackRequestFrom")
+  feedbackRequestsReceived  FeedbackRequest[]          @relation("FeedbackRequestTo")
   activatedGoals            GoalActivation[]
   goalProgress              GoalProgress[]
   createdGoals              Goal[]                     @relation("GoalCreator")
@@ -181,7 +183,6 @@ model Survey {
   rewardXP       Int              @default(0)
   targetAudience PublicoAlvoType  @default(todo_time)
   targetIds      String[]
-  isAnonymous    Boolean          @default(false)
   creatorId      String
   createdAt      DateTime         @default(now())
   updatedAt      DateTime         @updatedAt
@@ -448,8 +449,14 @@ model Feedback {
   type        FeedbackType
   content     String
   isPublic    Boolean        @default(false)
-  isAnonymous Boolean        @default(false)
   status      FeedbackStatus @default(pendente)
+  sentiment   FeedbackSentiment?
+  categories  Json?      // Lista de categorias/tags extraídas pela IA
+  intensity   Int?       // Intensidade de 1 a 10
+  aiAnalysis  Json?      // Objeto completo da análise (síntese, ações sugeridas)
+  viewedAt    DateTime?
+  isShared    Boolean        @default(false)
+  sharedPostId String?
   reviewedBy  String?
   reviewedAt  DateTime?
   reviewNote  String?
@@ -457,29 +464,50 @@ model Feedback {
   updatedAt   DateTime       @updatedAt
   fromUser    User           @relation("FeedbackFrom", fields: [fromUserId], references: [id])
   toUser      User           @relation("FeedbackTo", fields: [toUserId], references: [id])
+  request     FeedbackRequest?
 
   @@map("feedbacks")
+}
+
+model FeedbackRequest {
+  id         String                @id @default(cuid())
+  fromUserId String
+  toUserId   String
+  topic      String?
+  message    String?
+  status     FeedbackRequestStatus @default(pending)
+  expectation String?              // Expectativa: 'positivo', 'construtivo', 'específico'
+  feedbackId String?               @unique
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  fromUser   User                  @relation("FeedbackRequestFrom", fields: [fromUserId], references: [id])
+  toUser     User                  @relation("FeedbackRequestTo", fields: [toUserId], references: [id])
+  feedback   Feedback?             @relation(fields: [feedbackId], references: [id])
+
+  @@map("feedback_requests")
+}
+
+model GestorFeedbackConfig {
+  id                  String   @id @default(cuid())
+  gestorId            String   @unique
+  allowAnyUser        Boolean  @default(true)
+  allowPublicFeedback Boolean  @default(true)
+  requireApproval     Boolean  @default(false)
+  updatedAt           DateTime @updatedAt
+  gestor              User     @relation(fields: [gestorId], references: [id], onDelete: Cascade)
+
+  @@map("gestor_feedback_configs")
 }
 
 model FeedbackSettings {
   id                  String   @id @default("singleton")
   maxFeedbacksPerDay  Int      @default(5)
+  maxFeedbacksPerWeek Int      @default(20)
   allowPublicFeedback Boolean  @default(true)
   requireApproval     Boolean  @default(true)
-  allowAnonymous      Boolean  @default(true)
   updatedAt           DateTime @updatedAt
 
   @@map("feedback_settings")
-}
-
-model GestorFeedConfig {
-  id              String   @id @default(cuid())
-  gestorId        String   @unique
-  requireApproval Boolean  @default(false)
-  updatedAt       DateTime @updatedAt
-  gestor          User     @relation(fields: [gestorId], references: [id], onDelete: Cascade)
-
-  @@map("gestor_feed_configs")
 }
 
 // ─── Lojinha / Recompensas ────────────────────────────────────────────────────
@@ -500,8 +528,10 @@ model StoreItem {
   costStars         Int                         @default(0)
   quantity          Int?
   imageUrl          String?
-  internalNotes     String?
-  status            StoreItemStatus             @default(draft)
+  internalNotes            String?
+  allowMultipleRedemptions Boolean              @default(false)
+  maxRedemptionsPerUser    Int?
+  status                   StoreItemStatus      @default(draft)
   createdById       String
   createdAt         DateTime                    @default(now())
   updatedAt         DateTime                    @updatedAt
@@ -573,6 +603,7 @@ model StoreRewardRequest {
   category          String
   estimatedStarCost Int                      @default(0)
   justification     String
+  imageUrl          String?
   status            StoreRewardRequestStatus @default(pending)
   reviewNote        String?
   reviewedById      String?
@@ -936,6 +967,19 @@ enum FeedbackStatus {
   rejeitado
 }
 
+enum FeedbackSentiment {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+  CONSTRUCTIVE
+}
+
+enum FeedbackRequestStatus {
+  pending
+  fulfilled
+  declined
+}
+
 enum MoodLevel {
   muito_ruim
   ruim
@@ -1024,6 +1068,8 @@ enum StoreRewardRequestStatus {
   pending
   approved
   rejected
+  refused
+  proceeded
   converted
 }
 
@@ -1053,6 +1099,8 @@ enum NotificationType {
   store_manager_item_deactivated
   store_reward_requested
   store_reward_request_reviewed
+  feedback_request_received
+  feedback_rejected
 }
 
 enum NotificationStatus {
