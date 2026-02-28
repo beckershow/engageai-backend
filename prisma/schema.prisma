@@ -72,6 +72,8 @@ model User {
   rewardRequests            StoreRewardRequest[]       @relation("RewardRequester")
   reviewedRequests          StoreRewardRequest[]       @relation("RewardReviewer")
   storeAuditLogs            StoreAuditLog[]            @relation("AuditPerformer")
+  userFeedbackLimit         UserFeedbackLimit?         @relation("UserFeedbackLimitUser")
+  managedUserFeedbackLimits UserFeedbackLimit[]        @relation("UserFeedbackLimitGestor")
 
   @@map("users")
 }
@@ -488,24 +490,44 @@ model FeedbackRequest {
 }
 
 model GestorFeedbackConfig {
-  id                  String   @id @default(cuid())
-  gestorId            String   @unique
-  allowAnyUser        Boolean  @default(true)
-  allowPublicFeedback Boolean  @default(true)
-  requireApproval     Boolean  @default(false)
-  updatedAt           DateTime @updatedAt
-  gestor              User     @relation(fields: [gestorId], references: [id], onDelete: Cascade)
+  id                      String   @id @default(cuid())
+  gestorId                String   @unique
+  allowAnyUser            Boolean  @default(true)
+  allowPublicFeedback     Boolean  @default(true)
+  requireApproval         Boolean  @default(false)
+  limitsEnabled           Boolean  @default(true)
+  maxFeedbacksPerDay      Int      @default(5)
+  maxFeedbacksPerWeek     Int      @default(20)
+  individualLimitsEnabled Boolean  @default(false)
+  updatedAt               DateTime @updatedAt
+  gestor                  User     @relation(fields: [gestorId], references: [id], onDelete: Cascade)
 
   @@map("gestor_feedback_configs")
 }
 
-model FeedbackSettings {
-  id                  String   @id @default("singleton")
-  maxFeedbacksPerDay  Int      @default(5)
-  maxFeedbacksPerWeek Int      @default(20)
-  allowPublicFeedback Boolean  @default(true)
-  requireApproval     Boolean  @default(true)
+model UserFeedbackLimit {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  gestorId            String
+  maxFeedbacksPerDay  Int?
+  maxFeedbacksPerWeek Int?
+  createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+  user                User     @relation("UserFeedbackLimitUser",   fields: [userId],   references: [id], onDelete: Cascade)
+  gestor              User     @relation("UserFeedbackLimitGestor", fields: [gestorId], references: [id], onDelete: Cascade)
+
+  @@map("user_feedback_limits")
+}
+
+model FeedbackSettings {
+  id                      String   @id @default("singleton")
+  limitsEnabled           Boolean  @default(true)
+  maxFeedbacksPerDay      Int      @default(5)
+  maxFeedbacksPerWeek     Int      @default(20)
+  individualLimitsEnabled Boolean  @default(false)
+  allowPublicFeedback     Boolean  @default(true)
+  requireApproval         Boolean  @default(true)
+  updatedAt               DateTime @updatedAt
 
   @@map("feedback_settings")
 }
@@ -1101,6 +1123,9 @@ enum NotificationType {
   store_reward_request_reviewed
   feedback_request_received
   feedback_rejected
+  feedback_pending_approval
+  feedback_request_declined
+  feedback_request_fulfilled
 }
 
 enum NotificationStatus {

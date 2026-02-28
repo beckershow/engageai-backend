@@ -28,23 +28,30 @@ async function getEffectiveConfig(userId: string) {
   })
 
   const gestorId = user?.role === 'gestor' ? userId : user?.managerId ?? null
+  const global = await prisma.feedbackSettings.findUnique({ where: { id: 'singleton' } })
 
   if (!gestorId) {
-    const global = await prisma.feedbackSettings.findUnique({ where: { id: 'singleton' } })
     return {
       allowAnyUser: true,
       allowPublicFeedback: global?.allowPublicFeedback ?? true,
       requireApproval: global?.requireApproval ?? true,
+      limitsEnabled: true,
+      maxFeedbacksPerDay: null as number | null,
+      maxFeedbacksPerWeek: null as number | null,
+      individualLimitsEnabled: false,
     }
   }
 
   const config = await prisma.gestorFeedbackConfig.findUnique({ where: { gestorId } })
-  const global = await prisma.feedbackSettings.findUnique({ where: { id: 'singleton' } })
 
   return {
     allowAnyUser: config?.allowAnyUser ?? true,
     allowPublicFeedback: config?.allowPublicFeedback ?? true,
     requireApproval: config?.requireApproval ?? global?.requireApproval ?? false,
+    limitsEnabled: config?.limitsEnabled ?? true,
+    maxFeedbacksPerDay: config?.maxFeedbacksPerDay ?? null,
+    maxFeedbacksPerWeek: config?.maxFeedbacksPerWeek ?? null,
+    individualLimitsEnabled: config?.individualLimitsEnabled ?? false,
   }
 }
 
@@ -85,7 +92,7 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     const query = z.object({
       page: z.coerce.number().optional(),
       limit: z.coerce.number().optional(),
-      type: z.enum(['sent', 'received', 'pending']).optional(),
+      type: z.enum(['sent', 'received', 'pending', 'team-reviewed']).optional(),
       status: z.enum(['pendente', 'aprovado', 'rejeitado']).optional(),
     }).parse(request.query)
 
@@ -100,8 +107,16 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     } else if (query.type === 'received') {
       where.toUserId = userId
       where.status = 'aprovado'
-    } else if (query.type === 'pending' && (isAdmin || isGestor)) {
+    } else if (query.type === 'pending' && isAdmin) {
       where.status = 'pendente'
+    } else if (query.type === 'pending' && isGestor) {
+      // Only show pending feedbacks from the gestor's team
+      where.status = 'pendente'
+      where.fromUser = { managerId: userId }
+    } else if (query.type === 'team-reviewed' && (isAdmin || isGestor)) {
+      // Processed feedbacks (approved/rejected) from the gestor's team
+      where.status = { in: ['aprovado', 'rejeitado'] }
+      if (isGestor) where.fromUser = { managerId: userId }
     } else if (!isAdmin) {
       where.OR = [{ fromUserId: userId }, { toUserId: userId }]
     }
@@ -152,7 +167,9 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
       data: {
         sentToday, sentThisWeek, sentThisMonth, totalSent,
         totalReceived, receivedThisMonth, pendingRequests,
+        dailyLimit: globalSettings?.maxFeedbacksPerDay ?? 5,
         weeklyLimit: globalSettings?.maxFeedbacksPerWeek ?? 20,
+        limitsEnabled: globalSettings?.limitsEnabled ?? true,
         requireApproval: effectiveConfig?.requireApproval ?? true,
         allowPublicFeedback: effectiveConfig?.allowPublicFeedback ?? true,
         allowAnyUser: effectiveConfig?.allowAnyUser ?? true,
@@ -165,15 +182,19 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     preHandler: [authenticate, authorize(['gestor'])],
     schema: { tags: ['Feedbacks'], summary: "Get gestor's own feedback config" },
   }, async (request, reply) => {
-    let config = await prisma.gestorFeedbackConfig.findUnique({
-      where: { gestorId: request.user.id },
+    const [config, globalSettings] = await Promise.all([
+      prisma.gestorFeedbackConfig.findUnique({ where: { gestorId: request.user.id } }),
+      prisma.feedbackSettings.findUnique({ where: { id: 'singleton' } }),
+    ])
+    const data = config ?? await prisma.gestorFeedbackConfig.create({ data: { gestorId: request.user.id } })
+    return reply.send({
+      data,
+      globalDefaults: {
+        limitsEnabled: globalSettings?.limitsEnabled ?? true,
+        maxFeedbacksPerDay: globalSettings?.maxFeedbacksPerDay ?? 5,
+        maxFeedbacksPerWeek: globalSettings?.maxFeedbacksPerWeek ?? 20,
+      },
     })
-    if (!config) {
-      config = await prisma.gestorFeedbackConfig.create({
-        data: { gestorId: request.user.id },
-      })
-    }
-    return reply.send({ data: config })
   })
 
   // ─── PATCH /feedbacks/config — salvar config do gestor ──────────────────────
@@ -185,6 +206,10 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
       allowAnyUser: z.boolean().optional(),
       allowPublicFeedback: z.boolean().optional(),
       requireApproval: z.boolean().optional(),
+      limitsEnabled: z.boolean().optional(),
+      maxFeedbacksPerDay: z.number().int().min(1).max(50).optional(),
+      maxFeedbacksPerWeek: z.number().int().min(1).max(200).optional(),
+      individualLimitsEnabled: z.boolean().optional(),
     }).parse(request.body)
 
     const config = await prisma.gestorFeedbackConfig.upsert({
@@ -319,14 +344,24 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     const startOfWeek = new Date(); startOfWeek.setHours(0, 0, 0, 0)
     startOfWeek.setDate(startOfWeek.getDate() - startOfWeek.getDay())
 
-    const [countToday, countThisWeek] = await Promise.all([
+    const [countToday, countThisWeek, userLimit] = await Promise.all([
       prisma.feedback.count({ where: { fromUserId: request.user.id, createdAt: { gte: today } } }),
       prisma.feedback.count({ where: { fromUserId: request.user.id, createdAt: { gte: startOfWeek } } }),
+      prisma.userFeedbackLimit.findUnique({ where: { userId: request.user.id } }),
     ])
 
-    const maxWeek = globalSettings?.maxFeedbacksPerWeek ?? 20
-
-    if (countThisWeek >= maxWeek) throw new ForbiddenError(`Limite semanal de feedbacks atingido (${maxWeek}/semana)`)
+    // Prioridade: global.limitsEnabled → gestor.limitsEnabled → individual → gestor → global
+    if (globalSettings?.limitsEnabled !== false && effectiveConfig.limitsEnabled !== false) {
+      const indEnabled = effectiveConfig.individualLimitsEnabled
+      const maxDay = (indEnabled && userLimit?.maxFeedbacksPerDay)
+        ? userLimit.maxFeedbacksPerDay
+        : (effectiveConfig.maxFeedbacksPerDay ?? globalSettings?.maxFeedbacksPerDay ?? 5)
+      const maxWeek = (indEnabled && userLimit?.maxFeedbacksPerWeek)
+        ? userLimit.maxFeedbacksPerWeek
+        : (effectiveConfig.maxFeedbacksPerWeek ?? globalSettings?.maxFeedbacksPerWeek ?? 20)
+      if (countToday >= maxDay) throw new ForbiddenError(`Limite diário de feedbacks atingido (${maxDay}/dia)`)
+      if (countThisWeek >= maxWeek) throw new ForbiddenError(`Limite semanal de feedbacks atingido (${maxWeek}/semana)`)
+    }
 
     const finalStatus = effectiveConfig.requireApproval ? 'pendente' : 'aprovado'
 
@@ -345,19 +380,38 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
       },
     })
 
-    if (body.requestId) {
-      await prisma.feedbackRequest.update({
-        where: { id: body.requestId },
-        data: { status: 'fulfilled', feedbackId: feedback.id },
-      }).catch(() => { })
-    }
-
     const sender = await prisma.user.findUnique({
       where: { id: request.user.id },
       select: { nome: true },
     })
     const senderName = sender?.nome ?? 'Um colega'
     const typeLabel = feedbackTypeLabels[body.type] ?? body.type
+
+    if (body.requestId) {
+      const fulfilledReq = await prisma.feedbackRequest.findUnique({
+        where: { id: body.requestId },
+        select: { fromUserId: true, topic: true },
+      }).catch(() => null)
+
+      await prisma.feedbackRequest.update({
+        where: { id: body.requestId },
+        data: { status: 'fulfilled', feedbackId: feedback.id },
+      }).catch((err) => {
+        fastify.log.error(`[Feedback Request Update Error] ${err.message}`)
+      })
+
+      if (fulfilledReq) {
+        await enqueueNotification({
+          userId: fulfilledReq.fromUserId,
+          type: 'feedback_request_fulfilled',
+          title: 'Sua solicitação foi atendida! 🎉',
+          message: `${senderName} respondeu à sua solicitação de feedback${fulfilledReq.topic ? ` sobre "${fulfilledReq.topic}"` : ''}.`,
+          data: { feedbackId: feedback.id, fromUserId: request.user.id },
+        }).catch((err) => {
+          fastify.log.error(`[Notification Error - Request Fulfilled] ${err.message}`)
+        })
+      }
+    }
 
     if (finalStatus === 'aprovado') {
       await enqueueNotification({
@@ -366,7 +420,9 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
         title: 'Novo feedback recebido! 🎉',
         message: `${senderName} enviou um feedback de ${typeLabel} para você.`,
         data: { feedbackId: feedback.id, senderId: request.user.id, type: body.type },
-      }).catch(() => { })
+      }).catch((err) => {
+        fastify.log.error(`[Notification Error - Feedback Received] ${err.message}`)
+      })
 
       if (isPublic) {
         await createPublicFeedbackPost({
@@ -376,7 +432,23 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
           content: feedback.content,
           fromUser: feedback.fromUser,
           toUser: feedback.toUser,
-        }).catch(() => { })
+        }).catch((err) => {
+          fastify.log.error(`[Public Feedback Post Error] ${err.message}`)
+        })
+      }
+    } else if (finalStatus === 'pendente') {
+      // Notifica o gestor que há um feedback aguardando aprovação
+      const gestorId = request.user.managerId
+      if (gestorId) {
+        await enqueueNotification({
+          userId: gestorId,
+          type: 'feedback_pending_approval',
+          title: 'Feedback aguardando aprovação ⏳',
+          message: `${senderName} enviou um feedback de ${typeLabel} que precisa da sua aprovação.`,
+          data: { feedbackId: feedback.id, fromUserId: request.user.id, type: body.type },
+        }).catch((err) => {
+          fastify.log.error(`[Notification Error - Pending Approval] ${err.message}`)
+        })
       }
     }
 
@@ -386,7 +458,7 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
 
     return reply.code(201).send({
       data: feedback,
-      meta: { sentToday: countToday + 1, sentThisWeek: countThisWeek + 1, weeklyLimit: maxWeek },
+      meta: { sentToday: countToday + 1, sentThisWeek: countThisWeek + 1, weeklyLimit: globalSettings?.maxFeedbacksPerWeek ?? 20 },
     })
   })
 
@@ -425,7 +497,9 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
         message: `Seu feedback de ${typeLabel} para ${feedback.toUser?.nome ?? 'seu colega'} foi aprovado e entregue.`,
         data: { feedbackId: feedback.id },
       }),
-    ]).catch(() => { })
+    ]).catch((err) => {
+      fastify.log.error(`[Notification Error - Feedback Approval] ${err.message}`)
+    })
 
     if (feedback.isPublic) {
       await createPublicFeedbackPost({
@@ -435,10 +509,14 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
         content: feedback.content,
         fromUser: feedback.fromUser,
         toUser: feedback.toUser,
-      }).catch(() => { })
+      }).catch((err) => {
+        fastify.log.error(`[Public Feedback Post Error - Approval] ${err.message}`)
+      })
     }
 
-    FeedbackIntelligenceService.processAndPersist(feedback.id).catch(() => { })
+    FeedbackIntelligenceService.processAndPersist(feedback.id).catch((err) => {
+      fastify.log.error(`[AI Feedback Error - Approval] ${err.message}`)
+    })
 
     return reply.send({ data: feedback })
   })
@@ -464,9 +542,103 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
       title: 'Feedback não aprovado',
       message: `Seu feedback de ${typeLabel} para ${feedback.toUser?.nome ?? 'seu colega'} não foi aprovado.${note ? ` Motivo: ${note}` : ''}`,
       data: { feedbackId: feedback.id, reviewNote: note },
-    }).catch(() => { })
+    }).catch((err) => {
+      fastify.log.error(`[Notification Error - Feedback Rejection] ${err.message}`)
+    })
 
     return reply.send({ data: feedback })
+  })
+
+  // ─── DELETE /feedbacks/:id — remover feedback rejeitado (apenas remetente) ───
+  fastify.delete('/:id', {
+    preHandler: [authenticate],
+    schema: { tags: ['Feedbacks'], summary: 'Delete a rejected feedback (sender only)' },
+  }, async (request, reply) => {
+    const { id } = z.object({ id: z.string() }).parse(request.params)
+
+    const feedback = await prisma.feedback.findUnique({ where: { id } })
+    if (!feedback) throw new NotFoundError('Feedback', id)
+    if (feedback.fromUserId !== request.user.id) throw new ForbiddenError()
+    if (feedback.status !== 'rejeitado') throw new ForbiddenError('Só é possível remover feedbacks rejeitados')
+
+    await prisma.feedback.delete({ where: { id } })
+
+    return reply.code(204).send()
+  })
+
+  // ─── GET /feedbacks/team-limits — limites individuais do time (gestor) ──────
+  fastify.get('/team-limits', {
+    preHandler: [authenticate, authorize(['gestor'])],
+    schema: { tags: ['Feedbacks'], summary: 'List team members with individual feedback limits' },
+  }, async (request, reply) => {
+    const gestorId = request.user.id
+
+    const [members, globalSettings] = await Promise.all([
+      prisma.user.findMany({
+        where: { managerId: gestorId, isActive: true },
+        select: {
+          id: true, nome: true, cargo: true, avatar: true,
+          userFeedbackLimit: { select: { id: true, maxFeedbacksPerDay: true, maxFeedbacksPerWeek: true } },
+        },
+        orderBy: { nome: 'asc' },
+      }),
+      prisma.feedbackSettings.findUnique({ where: { id: 'singleton' } }),
+    ])
+
+    return reply.send({
+      data: {
+        members: members.map(m => ({
+          userId: m.id, nome: m.nome, cargo: m.cargo, avatar: m.avatar,
+          customLimit: m.userFeedbackLimit ?? null,
+        })),
+        globalDefaults: {
+          limitsEnabled: globalSettings?.limitsEnabled ?? true,
+          maxFeedbacksPerDay: globalSettings?.maxFeedbacksPerDay ?? 5,
+          maxFeedbacksPerWeek: globalSettings?.maxFeedbacksPerWeek ?? 20,
+        },
+      },
+    })
+  })
+
+  // ─── PUT /feedbacks/team-limits/:userId — definir limite individual (gestor) ─
+  fastify.put('/team-limits/:userId', {
+    preHandler: [authenticate, authorize(['gestor'])],
+    schema: { tags: ['Feedbacks'], summary: 'Set individual feedback limit for a team member' },
+  }, async (request, reply) => {
+    const { userId } = z.object({ userId: z.string() }).parse(request.params)
+    const body = z.object({
+      maxFeedbacksPerDay: z.number().int().min(1).max(50).nullable(),
+      maxFeedbacksPerWeek: z.number().int().min(1).max(200).nullable(),
+    }).parse(request.body)
+
+    const member = await prisma.user.findUnique({ where: { id: userId }, select: { managerId: true } })
+    if (!member || member.managerId !== request.user.id) {
+      throw new ForbiddenError('Este colaborador não pertence ao seu time')
+    }
+
+    const limit = await prisma.userFeedbackLimit.upsert({
+      where: { userId },
+      create: { userId, gestorId: request.user.id, ...body },
+      update: { ...body, gestorId: request.user.id },
+    })
+
+    return reply.send({ data: limit })
+  })
+
+  // ─── DELETE /feedbacks/team-limits/:userId — remover limite individual ────────
+  fastify.delete('/team-limits/:userId', {
+    preHandler: [authenticate, authorize(['gestor'])],
+    schema: { tags: ['Feedbacks'], summary: 'Remove individual feedback limit for a team member' },
+  }, async (request, reply) => {
+    const { userId } = z.object({ userId: z.string() }).parse(request.params)
+
+    const existing = await prisma.userFeedbackLimit.findUnique({ where: { userId } })
+    if (!existing || existing.gestorId !== request.user.id) {
+      throw new ForbiddenError('Limite não encontrado ou sem permissão')
+    }
+
+    await prisma.userFeedbackLimit.delete({ where: { userId } })
+    return reply.code(204).send()
   })
 
   // ─── GET /feedbacks/settings — configurações globais (superadmin) ────────────
@@ -485,8 +657,10 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     schema: { tags: ['Feedbacks'], summary: 'Update global feedback settings' },
   }, async (request, reply) => {
     const body = z.object({
+      limitsEnabled: z.boolean().optional(),
       maxFeedbacksPerDay: z.number().int().min(1).max(50).optional(),
       maxFeedbacksPerWeek: z.number().int().min(1).max(200).optional(),
+      individualLimitsEnabled: z.boolean().optional(),
       allowPublicFeedback: z.boolean().optional(),
       requireApproval: z.boolean().optional(),
     }).parse(request.body)
@@ -552,9 +726,77 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
       title: 'Solicitação de feedback 📬',
       message: `${sender?.nome ?? 'Um colega'} está pedindo seu feedback${body.topic ? ` sobre "${body.topic}"` : ''}.`,
       data: { requestId: feedbackRequest.id, fromUserId: request.user.id },
-    }).catch(() => { })
+    }).catch((err) => {
+      fastify.log.error(`[Notification Error - Request Received] ${err.message}`)
+    })
 
     return reply.code(201).send({ data: feedbackRequest })
+  })
+
+  // ─── PATCH /feedbacks/:id/resend — reenviar feedback rejeitado ───────────────
+  fastify.patch('/:id/resend', {
+    preHandler: [authenticate],
+    schema: { tags: ['Feedbacks'], summary: 'Resend a rejected feedback with optional new content' },
+  }, async (request, reply) => {
+    const { id } = z.object({ id: z.string() }).parse(request.params)
+    const body = z.object({ content: z.string().min(10).optional() }).parse(request.body ?? {})
+
+    const feedback = await prisma.feedback.findUnique({
+      where: { id },
+      include: { fromUser: { select: { managerId: true, nome: true } }, toUser: { select: { nome: true } } },
+    })
+    if (!feedback) throw new NotFoundError('Feedback', id)
+    if (feedback.fromUserId !== request.user.id) throw new ForbiddenError()
+    if (feedback.status !== 'rejeitado') throw new ForbiddenError('Só é possível reenviar feedbacks rejeitados')
+
+    const managerId = feedback.fromUser?.managerId ?? null
+    const effectiveConfig = await getEffectiveConfig(request.user.id)
+    const finalStatus = effectiveConfig.requireApproval && managerId ? 'pendente' : 'aprovado'
+
+    const updated = await prisma.feedback.update({
+      where: { id },
+      data: {
+        content: body.content ?? feedback.content,
+        status: finalStatus,
+        reviewedBy: null,
+        reviewedAt: null,
+        reviewNote: null,
+      },
+      include: {
+        fromUser: { select: { id: true, nome: true, cargo: true, avatar: true } },
+        toUser: { select: { id: true, nome: true, cargo: true, avatar: true } },
+      },
+    })
+
+    const typeLabel = feedbackTypeLabels[updated.type] ?? updated.type
+    const senderName = updated.fromUser?.nome ?? 'Um colega'
+
+    if (finalStatus === 'pendente' && managerId) {
+      await enqueueNotification({
+        userId: managerId,
+        type: 'feedback_pending_approval',
+        title: 'Novo feedback aguardando aprovação',
+        message: `${senderName} reenviou um feedback de ${typeLabel} para revisão.`,
+        data: { feedbackId: updated.id },
+      }).catch((err) => {
+        fastify.log.error(`[Notification Error - Feedback Resend Pending] ${err.message}`)
+      })
+    } else if (finalStatus === 'aprovado') {
+      await Promise.all([
+        enqueueNotification({
+          userId: updated.toUserId,
+          type: 'feedback_received',
+          title: 'Novo feedback recebido! 🎉',
+          message: `${senderName} enviou um feedback de ${typeLabel} para você.`,
+          data: { feedbackId: updated.id, type: updated.type },
+        }),
+        FeedbackIntelligenceService.processAndPersist(updated.id),
+      ]).catch((err) => {
+        fastify.log.error(`[Notification Error - Feedback Resend Approved] ${err.message}`)
+      })
+    }
+
+    return reply.send({ data: updated })
   })
 
   // ─── PATCH /feedbacks/requests/:id/decline — recusar solicitação ─────────────
@@ -569,6 +811,17 @@ export async function feedbacksRoutes(fastify: FastifyInstance): Promise<void> {
     if (req.status !== 'pending') throw new ForbiddenError('Esta solicitação já foi processada')
 
     const updated = await prisma.feedbackRequest.update({ where: { id }, data: { status: 'declined' } })
+
+    await enqueueNotification({
+      userId: req.fromUserId,
+      type: 'feedback_request_declined',
+      title: 'Solicitação de feedback recusada',
+      message: `Sua solicitação de feedback não foi atendida desta vez.`,
+      data: { requestId: id },
+    }).catch((err) => {
+      fastify.log.error(`[Notification Error - Request Declined] ${err.message}`)
+    })
+
     return reply.send({ data: updated })
   })
 }
